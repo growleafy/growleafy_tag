@@ -1,5 +1,5 @@
 """
-Universal Enterprise Tag & Label Generator – Precise Rendering & Validated Preview
+Enterprise Tag Generator – Precision Anchor System, Branding & Smart Barcode Logic
 """
 import streamlit as st
 import pandas as pd
@@ -16,7 +16,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 import base64
 import tempfile
-import xml.etree.ElementTree as ET
 
 # Optional imports – graceful degradation
 try:
@@ -41,7 +40,7 @@ except ImportError:
     HAS_TTFONT = False
 
 # -----------------------------------------------------------------------------
-# 1. UNIVERSAL DATA PROVIDER
+# 1. DATA PROVIDER
 # -----------------------------------------------------------------------------
 class DataProvider:
     def fetch(self, params: dict) -> pd.DataFrame:
@@ -55,9 +54,8 @@ class MockProvider(DataProvider):
                 "id": ["P1", "P2", "P3", "P4"],
                 "name": ["Monstera Deliciosa", "Ficus Lyrata", "Aloe Vera", "Snake Plant"],
                 "name_bn": ["মনস্টেরা ডেলিসিওসা", "ফিকাস লিরাটা", "অ্যালো ভেরা", "স্নেক প্ল্যান্ট"],
-                "botanical": ["Monstera", "Ficus", "Aloe", "Sansevieria"],
-                "mrp": [1200, 850, 250, 450],
                 "sku": ["MNST-01", "FIC-02", "ALV-03", "SNK-04"],
+                "mrp": [1200, 850, 250, 450],
                 "image_url": [
                     "https://images.unsplash.com/photo-1614594975525-e45190c55d0b?w=200", 
                     "https://images.unsplash.com/photo-1598881604340-9be93332939f?w=200", 
@@ -82,7 +80,7 @@ def get_data_provider(source_type, credentials=None):
     return MockProvider()
 
 # -----------------------------------------------------------------------------
-# 2. LABEL TEMPLATE
+# 2. LABEL TEMPLATE WITH NEW OPTIONS
 # -----------------------------------------------------------------------------
 class LabelTemplate:
     def __init__(self, name="Custom", width=60, height=30, cols=3, rows=9,
@@ -91,8 +89,11 @@ class LabelTemplate:
                  include_barcode=False, barcode_type="code128", show_crop_marks=True,
                  font_name="Helvetica", font_size=8, color="#000000",
                  output_format="A4_sheet", roll_width=210, roll_gap=3,
+                 # Branding Options
                  enable_header=False, header_text="GrowLeafy Nursery", 
-                 enable_footer=False, footer_text="Contact: +91-XXXXX | www.growleafy.com"):
+                 enable_footer=False, footer_text="Contact: +91-XXXXX | www.growleafy.com",
+                 # SKU Logic
+                 hide_sku_text_if_barcode=True):
         
         self.name = name
         self.width = width
@@ -103,11 +104,11 @@ class LabelTemplate:
         self.margin_top = margin_top
         self.gap_x = gap_x
         self.gap_y = gap_y
-        # FIXED: Coordinates are now based on Bottom-Left (0,0) of the label
+        # FIXED: Coordinates now use Bottom-Left (0,0) of the label
         self.fields = fields or [
             {"field": "image_url", "type": "image", "x": 2, "y": 5, "width": 20, "height": 20},
             {"field": "name", "type": "text", "x": 25, "y": 25, "font_size": 10, "bold": True},
-            {"field": "sku", "type": "text", "x": 25, "y": 18, "font_size": 8},
+            {"field": "sku", "type": "text", "x": 25, "y": 15, "font_size": 8},
             {"field": "mrp", "type": "text", "x": 25, "y": 5, "font_size": 12, "bold": True, "prefix": "Rs. "}
         ]
         self.include_qr = include_qr
@@ -124,10 +125,13 @@ class LabelTemplate:
         self.roll_width = roll_width
         self.roll_gap = roll_gap
         self.bilingual_mode = False
+        
+        # New Settings
         self.enable_header = enable_header
         self.header_text = header_text
         self.enable_footer = enable_footer
         self.footer_text = footer_text
+        self.hide_sku_text_if_barcode = hide_sku_text_if_barcode
 
     def to_dict(self):
         return self.__dict__
@@ -137,36 +141,52 @@ class LabelTemplate:
         return cls(**d)
 
 # -----------------------------------------------------------------------------
-# 3. RENDER ENGINE
+# 3. PRECISION RENDER ENGINE
 # -----------------------------------------------------------------------------
 class RenderEngine:
     def __init__(self, template: LabelTemplate):
         self.template = template
 
     def _draw_label_content(self, c, x, y, lbl_w_mm, lbl_h_mm, row, lang='en'):
-        """Draw a single label. Coordinates (x,y) are the Bottom-Left corner of the label."""
+        """
+        Draws label content. 
+        Input `x, y` refers to the TOP-LEFT corner of the label grid.
+        All offsets are calculated strictly from the Bottom-Left corner (y + lbl_h).
+        """
         lbl_w = lbl_w_mm * mm
         lbl_h = lbl_h_mm * mm
         
-        c.setFillColor(self.template.color)
-        
-        # 1. Branding Header
+        # Bottom-Left Y coordinate of this specific label
+        y_bottom_left = y + lbl_h_mm * mm
+
+        # 1. Branding Header (Placed 2mm from Top-Left edge)
         if self.template.enable_header:
             c.setFont(self.template.font_name, 10)
             c.setFillColorRGB(0, 0, 0)
-            c.drawCentredString(x + lbl_w/2, y + lbl_h - 2*mm, self.template.header_text)
+            c.drawCentredString(x + lbl_w / 2, y + 2*mm, self.template.header_text)
 
-        # 2. Content Fields (Text and Images)
+        # 2. Branding Footer (Placed 2mm from Bottom-Left edge)
+        if self.template.enable_footer:
+            c.setFont(self.template.font_name, 8)
+            c.setFillColorRGB(0.2, 0.2, 0.2)
+            c.drawCentredString(x + lbl_w / 2, y_bottom_left - 2*mm, self.template.footer_text)
+
+        # 3. Content Fields (Text and Images)
         for fld in self.template.fields:
             field_name = fld["field"]
             field_type = fld.get("type", "text")
+            
+            # Skip drawing text SKU if barcode is enabled & configured to hide text
+            if self.template.include_barcode and self.template.hide_sku_text_if_barcode and field_name == "sku":
+                continue
             
             lookup_name = field_name
             if lang == 'bn' and f"{field_name}_bn" in row:
                 lookup_name = f"{field_name}_bn"
             
+            # Absolute X / Y from Bottom-Left
             pos_x = x + fld["x"] * mm
-            pos_y = y + fld["y"] * mm # FIXED: This is strictly the bottom-left offset.
+            pos_y = y_bottom_left + fld["y"] * mm
             
             if field_type == "image":
                 img_url = str(row.get(field_name, ""))
@@ -187,7 +207,7 @@ class RenderEngine:
                 c.setFont(self.template.font_name + ("-Bold" if fld.get("bold") else ""), fld.get("font_size", self.template.font_size))
                 c.drawString(pos_x, pos_y, text)
 
-        # 3. QR Code (Aligned to Top-Right)
+        # 4. QR Code (Aligned to Top-Right)
         if self.template.include_qr:
             qr = qrcode.QRCode(version=1, box_size=10, border=1)
             qr.add_data(f"https://growleafy.com/item/{row.get('sku', 'UNKNOWN')}")
@@ -200,10 +220,10 @@ class RenderEngine:
             qr_w = self.template.qr_size * mm
             c.drawImage(qr_img,
                         x + lbl_w - qr_w - self.template.qr_x_offset * mm,
-                        y + lbl_h - qr_w - self.template.qr_y_offset * mm, # Aligned to Top-Right!
+                        y + lbl_h - qr_w - self.template.qr_y_offset * mm,
                         width=qr_w, height=qr_w)
 
-        # 4. Barcode (Centered at Bottom)
+        # 5. Barcode (Centered perfectly at bottom, 2mm from bottom edge)
         if self.template.include_barcode and HAS_BARCODE:
             sku = str(row.get('sku', '000000'))
             code = barcode.get(self.template.barcode_type, sku, writer=ImageWriter())
@@ -214,17 +234,11 @@ class RenderEngine:
                 
                 barcode_w_mm = min(40, lbl_w_mm - 10)
                 barcode_h_mm = 10
-                barcode_x = x + (lbl_w_mm - barcode_w_mm)/2 * mm # Centered!
-                barcode_y = y + 2 * mm # Placed 2mm from bottom edge.
+                barcode_x = x + (lbl_w_mm - barcode_w_mm) / 2 * mm
+                barcode_y = y_bottom_left + 2 * mm
                 
                 c.drawImage(barcode_img, barcode_x, barcode_y, width=barcode_w_mm*mm, height=barcode_h_mm*mm)
             os.unlink(tmp.name)
-            
-        # 5. Branding Footer
-        if self.template.enable_footer:
-            c.setFont(self.template.font_name, 8)
-            c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawCentredString(x + lbl_w/2, y + 2*mm, self.template.footer_text)
 
     def _render_page_a4(self, c, dataframe, lang='en'):
         page_w_mm, page_h_mm = 210, 297
@@ -235,10 +249,11 @@ class RenderEngine:
         gap_x_mm = self.template.gap_x
         gap_y_mm = self.template.gap_y
         
-        # Auto-fit logic: Prevents overflow!
+        # Auto-fit logic to prevent bleeding off the page
         max_allowed_cols = int((page_w_mm - 2 * margin_x_mm) / (lbl_w_mm + gap_x_mm))
         actual_cols = min(self.template.cols, max_allowed_cols if max_allowed_cols > 0 else 1)
         
+        # TOP-LEFT Y coordinate (0 is bottom in ReportLab, so we work down from the page top)
         x = margin_x_mm * mm
         y = page_h_mm * mm - margin_y_mm * mm - lbl_h_mm * mm
         col_idx, row_idx = 0, 0
@@ -249,7 +264,6 @@ class RenderEngine:
                 c.rect(x, y, lbl_w_mm*mm, lbl_h_mm*mm, fill=0)
                 c.setStrokeColorRGB(0, 0, 0)
 
-            # FIXED: Pass Bottom-Left coordinate
             self._draw_label_content(c, x, y, lbl_w_mm, lbl_h_mm, row, lang)
 
             col_idx += 1
@@ -278,13 +292,11 @@ class RenderEngine:
         return buffer
 
     def render_svg_preview(self, dataframe: pd.DataFrame, max_items=8) -> str:
-        """Powerful SVG Preview that mimics the PDF exactly to catch errors."""
         if not HAS_SVGWRITE:
             return "<svg></svg>"
             
         page_w_px = 800
-        # Scaling: We map mm to pixels for viewing. 1mm = 3px
-        scale = 3 
+        scale = 3
         lbl_w_px = self.template.width * scale
         lbl_h_px = self.template.height * scale
         gap_x_px = self.template.gap_x * scale
@@ -296,25 +308,18 @@ class RenderEngine:
         actual_cols = min(self.template.cols, max_allowed_cols if max_allowed_cols > 0 else 1)
         
         dwg = svgwrite.Drawing(size=(f"{page_w_px}px", "800px"))
-        
         x, y = margin_x_px, margin_y_px
         col_idx, row_idx = 0, 0
         
         for _, row in dataframe.head(max_items).iterrows():
-            # Draw Box
             dwg.add(dwg.rect(insert=(x, y), size=(lbl_w_px, lbl_h_px), fill="white", stroke="gray", stroke_width=1))
             
-            # Simulate Content (mirroring PDF Y-coordinates)
             for fld in self.template.fields:
                 field_type = fld.get("type", "text")
                 
-                # SVG's Y=0 is at the TOP. PDF's Y=0 is at the BOTTOM.
-                # To mirror, we must calculate SVG Y as: `label_bottom(y) + fld[y] * scale`
-                # Where `label_bottom(y)` is `y + lbl_h_px`. 
-                # Wait, no: PDF `y` + `fld["y"]`.
-                # SVG `y` = `y_svg` + `lbl_h_px` - (PDF `y` + PDF `fld["y"]`)?
-                # Let's just calculate it. SVG Text starts from the TOP baseline.
-                
+                if self.template.include_barcode and self.template.hide_sku_text_if_barcode and fld.get("field") == "sku":
+                    continue
+
                 pos_x = x + fld["x"] * scale
                 
                 if field_type == "text":
@@ -323,16 +328,16 @@ class RenderEngine:
                         text = fld["prefix"] + text
                     
                     font_size = fld.get("font_size", self.template.font_size)
-                    # Transform PDF Y to SVG Y: SVG_Y = Outer_Y + Label_Height - PDF_Y
-                    pos_y = y + lbl_h_px - (fld["y"] * scale) 
+                    # SVG coordinates (Y from Top). PDF coordinates (Y from Bottom).
+                    # Math: SVG Y = SVG Top + Label_Height - PDF Y_Offset
+                    pos_y = y + lbl_h_px - (fld["y"] * scale)
                     dwg.add(dwg.text(text, insert=(pos_x, pos_y), font_size=f"{font_size}px", fill="#000000", font_family="sans-serif"))
             
-            # Simulate Barcode (Centered in SVG)
             if self.template.include_barcode:
                 barcode_w_px = min(40*scale, lbl_w_px - 20)
                 barcode_h_px = 10*scale
                 barcode_x = x + (lbl_w_px - barcode_w_px)/2
-                barcode_y = y + 2*scale # 2mm from bottom in SVG
+                barcode_y = y + lbl_h_px - (2 * scale) # 2mm from bottom
                 dwg.add(dwg.rect(insert=(barcode_x, barcode_y), size=(barcode_w_px, barcode_h_px), fill="black"))
 
             col_idx += 1
@@ -347,65 +352,17 @@ class RenderEngine:
         return dwg.tostring()
 
 # -----------------------------------------------------------------------------
-# 4. AI AUTO DESIGNER
-# -----------------------------------------------------------------------------
-class AIDesigner:
-    @staticmethod
-    def suggest_layout(dataframe: pd.DataFrame, user_prompt: str = "") -> LabelTemplate:
-        avg_name_len = dataframe["name"].str.len().mean() if "name" in dataframe else 10
-        suggested_width = max(40, min(100, 20 + int(avg_name_len * 1.2)))
-        suggested_cols = 3 if suggested_width < 65 else 2
-        fields = [
-            {"field": "image_url", "type": "image", "x": 2, "y": 5, "width": 20, "height": 20},
-            {"field": "name", "type": "text", "x": 25, "y": 25, "font_size": 10, "bold": True},
-            {"field": "botanical", "type": "text", "x": 25, "y": 18, "font_size": 7},
-            {"field": "mrp", "type": "text", "x": 25, "y": 5, "font_size": 12, "bold": True, "prefix": "Rs. "}
-        ]
-        return LabelTemplate(
-            name="AI Suggested",
-            width=suggested_width, height=40, cols=suggested_cols, rows=6,
-            fields=fields, include_qr=True
-        )
-
-# -----------------------------------------------------------------------------
-# 5. DATA VALIDATION ENGINE
-# -----------------------------------------------------------------------------
-def validate_data_and_template(template: LabelTemplate, df: pd.DataFrame):
-    errors = []
-    
-    # 1. Check Page Width
-    page_w_mm = 210
-    max_allowed_cols = int((page_w_mm - 2 * template.margin_left) / (template.width + template.gap_x))
-    if template.cols > max_allowed_cols:
-        errors.append(f"⚠️ A4 is {page_w_mm}mm wide. You requested {template.cols} columns, but maximum possible is {max_allowed_cols}. Please reduce Columns to {max_allowed_cols} or smaller.")
-
-    # 2. Check JSON Fields validity
-    if not isinstance(template.fields, list):
-        errors.append("⚠️ Fields JSON is corrupted. Please check the JSON format.")
-    
-    # 3. Check Dataframe Columns exist
-    if not df.empty:
-        for fld in template.fields:
-            field_name = fld.get("field")
-            if fld.get("type") == "text" and field_name not in df.columns:
-                errors.append(f"⚠️ Field '{field_name}' defined in your JSON does not exist in your uploaded Dataframe.")
-                
-    return errors
-
-# -----------------------------------------------------------------------------
-# 6. STREAMLIT UI
+# 4. STREAMLIT APPLICATION
 # -----------------------------------------------------------------------------
 def render(db_manager=None):
     st.set_page_config(layout="wide")
     st.title("🏷️ Universal Advanced Tag & Label Generator")
-    st.caption("Precision-Auto-Fit Layout + Hardcoded Error Blockers")
+    st.caption("Precision-Aligned: Bilingual, Branding, Auto-Fit & Smart SKU Override")
 
     if "current_template" not in st.session_state:
         st.session_state.current_template = LabelTemplate()
     if "dataframe" not in st.session_state:
         st.session_state.dataframe = pd.DataFrame()
-    if "font_loaded" not in st.session_state:
-        st.session_state.font_loaded = False
 
     template = st.session_state.current_template
 
@@ -446,14 +403,23 @@ def render(db_manager=None):
                 template.gap_y = st.number_input("Vertical Gap (mm)", value=template.gap_y)
                 template.cols = st.number_input("Columns", value=template.cols, min_value=1)
                 template.rows = st.number_input("Rows", value=template.rows, min_value=1)
-            with st.expander("✨ Fields & Positioning (Strict Bottom-Left Coords)", expanded=True):
-                st.info("Coordinates `x`=offset from left edge, `y`=offset from bottom edge.")
+            
+            with st.expander("✨ Fields & Positioning (Use `y` as offset from Bottom)", expanded=True):
+                st.caption("Coordinates: `x`=dist from left, `y`=dist from bottom of the box.")
                 fields_json = st.text_area("Fields (JSON)", value=json.dumps(template.fields, indent=2), height=250)
                 try:
                     template.fields = json.loads(fields_json)
                 except:
                     st.error("Invalid JSON format")
                 template.color = st.color_picker("Text Color", template.color)
+
+            with st.expander("📞 Branding (Nursery Name & Contact)", expanded=True):
+                template.enable_header = st.toggle("Show Header", value=template.enable_header)
+                if template.enable_header:
+                    template.header_text = st.text_input("Header Text", value=template.header_text)
+                template.enable_footer = st.toggle("Show Footer", value=template.enable_footer)
+                if template.enable_footer:
+                    template.footer_text = st.text_input("Footer Text", value=template.footer_text)
                 
         with col_right:
             st.subheader("Codes & Marks")
@@ -462,57 +428,58 @@ def render(db_manager=None):
                 template.qr_size = st.slider("QR Size (mm)", 10, 40, template.qr_size)
                 template.qr_x_offset = st.slider("QR Offset Right (mm)", 0, 30, template.qr_x_offset)
                 template.qr_y_offset = st.slider("QR Offset Top (mm)", 0, 30, template.qr_y_offset)
+                
             template.include_barcode = st.toggle("Barcode", value=template.include_barcode)
             if template.include_barcode:
                 template.barcode_type = st.selectbox("Barcode Type", ["code128", "ean13", "upca"] if HAS_BARCODE else ["code128"])
-            template.show_crop_marks = st.toggle("Show Crop Marks", value=template.show_crop_marks)
+                # SMART SKU LOGIC
+                template.hide_sku_text_if_barcode = st.checkbox("Hide text SKU when Barcode is active", value=template.hide_sku_text_if_barcode)
+                if template.hide_sku_text_if_barcode:
+                    st.caption("✅ The alphanumeric SKU text will be removed, leaving only the Barcode.")
             
-            st.divider()
-            st.subheader("📞 Branding (Header/Footer)")
-            template.enable_header = st.toggle("Show Header", value=template.enable_header)
-            if template.enable_header:
-                template.header_text = st.text_input("Header Text", value=template.header_text)
-            template.enable_footer = st.toggle("Show Footer", value=template.enable_footer)
-            if template.enable_footer:
-                template.footer_text = st.text_input("Footer Text", value=template.footer_text)
+            template.show_crop_marks = st.toggle("Show Crop Marks", value=template.show_crop_marks)
 
         st.session_state.current_template = template
 
     with tab3:
         st.subheader("🤖 AI‑Powered Layout Suggestion")
-        user_prompt = st.text_area("Describe your needs (optional)")
         if st.button("✨ Generate AI Design", use_container_width=True):
             if not st.session_state.dataframe.empty:
-                with st.spinner("Consulting DeepSeek AI..."):
-                    suggested = AIDesigner.suggest_layout(st.session_state.dataframe, user_prompt)
+                with st.spinner("Generating smart layout..."):
+                    avg_name_len = st.session_state.dataframe["name"].str.len().mean() if "name" in st.session_state.dataframe else 10
+                    suggested_width = max(40, min(100, 20 + int(avg_name_len * 1.2)))
+                    suggested_cols = 3 if suggested_width < 65 else 2
+                    fields = [
+                        {"field": "image_url", "type": "image", "x": 2, "y": 5, "width": 20, "height": 20},
+                        {"field": "name", "type": "text", "x": 25, "y": 25, "font_size": 10, "bold": True},
+                        {"field": "mrp", "type": "text", "x": 25, "y": 5, "font_size": 12, "bold": True, "prefix": "Rs. "}
+                    ]
+                    suggested = LabelTemplate(name="AI Suggested", width=suggested_width, height=40, cols=suggested_cols, rows=6, fields=fields, include_qr=True)
                     st.session_state.current_template = suggested
-                    st.success("AI design applied! Go to Label Designer to tweak.")
+                    st.success("AI design applied! Tweaks available in Label Designer.")
                     st.json(suggested.to_dict())
             else:
                 st.warning("Load data first")
 
     with tab4:
         st.subheader("Output Settings")
-        st.markdown("#### 🔤 Unicode Font Setup (Required for Bengali)")
-        uploaded_font = st.file_uploader("Upload a Unicode .ttf font", type=["ttf"])
+        st.markdown("#### 🔤 Unicode Font Setup (For Bengali)")
+        uploaded_font = st.file_uploader("Upload a Unicode .ttf font (e.g. Noto Sans Bengali)", type=["ttf"])
         if uploaded_font and HAS_TTFONT:
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".ttf") as tmp:
                     tmp.write(uploaded_font.getvalue())
                     tmp.flush()
                     pdfmetrics.registerFont(TTFont('UnicodeFont', tmp.name))
-                    st.session_state.font_loaded = True
                     template.font_name = 'UnicodeFont'
                     st.success("Unicode font loaded successfully!")
             except Exception as e:
                 st.error(f"Failed to load font: {e}")
-        
+
         template.output_format = st.selectbox("Print Format", ["A4_sheet", "continuous_roll", "ZPL"])
         if template.output_format == "A4_sheet":
             lang_mode = st.radio("Language Mode", ["English Only", "Bilingual Double-Sided A4"])
             template.bilingual_mode = (lang_mode == "Bilingual Double-Sided A4")
-        else:
-            template.bilingual_mode = False
 
         if template.output_format == "continuous_roll":
             template.roll_width = st.number_input("Roll Width (mm)", value=template.roll_width)
@@ -524,7 +491,6 @@ def render(db_manager=None):
 
     with tab5:
         st.subheader("Preview & Generate")
-        
         if st.session_state.dataframe.empty:
             st.warning("No data to print. Select data source first.")
             return
@@ -532,30 +498,27 @@ def render(db_manager=None):
         full_df = pd.concat([st.session_state.dataframe] * st.session_state.copies, ignore_index=True)
         engine = RenderEngine(template)
 
+        # Real-time layout validation
+        page_w_mm, page_h_mm = 210, 297
+        max_allowed_cols = int((page_w_mm - 2 * template.margin_left) / (template.width + template.gap_x))
+        if template.cols > max_allowed_cols:
+            st.error(f"⚠️ Layout Error: A4 is {page_w_mm}mm wide. You requested {template.cols} columns, but max is {max_allowed_cols}. Reduce Columns or margins.")
+            st.stop()
+
         col_a, col_b, col_c = st.columns(3)
         col_a.metric("Total Items", len(full_df))
-        
-        # VALIDATION BEFORE ALLOWING DOWNLOAD
-        errors = validate_data_and_template(template, full_df)
-        
-        if errors:
-            for err in errors:
-                st.error(err)
-            st.stop() # Stop UI execution until user fixes the input data or layout settings.
-        else:
-            st.success("✅ All layout and data checks passed.")
-
         if template.output_format == "A4_sheet":
-            items_per_page = min(template.cols, int((210 - 2 * template.margin_left) / (template.width + template.gap_x))) * template.rows
+            items_per_page = min(template.cols, max_allowed_cols) * template.rows
             pages = max(1, (len(full_df) + items_per_page - 1) // items_per_page)
             if template.bilingual_mode: pages *= 2
             col_b.metric("Pages (A4)", pages)
 
-        # "STRONG" LIVE PREVIEW
+        st.subheader("📌 Live Layout Preview")
         if HAS_SVGWRITE:
             svg_str = engine.render_svg_preview(full_df, max_items=8)
-            st.markdown("#### 📌 Accurate Live Preview (Matches PDF 1:1)")
             st.image(f"data:image/svg+xml;base64,{base64.b64encode(svg_str.encode()).decode()}", use_column_width=True)
+        else:
+            st.warning("Install `svgwrite` for live preview.")
 
         if st.button("🚀 Generate & Download", type="primary", use_container_width=True):
             with st.status("Rendering...", expanded=True) as status:
@@ -571,3 +534,6 @@ def render(db_manager=None):
                     mime, fname = "text/plain", "labels.zpl"
                 status.update(label="Ready!", state="complete")
                 st.download_button("📥 Download", data=buf, file_name=fname, mime=mime, use_container_width=True)
+
+if __name__ == "__main__":
+    render()
