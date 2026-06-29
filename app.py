@@ -35,14 +35,39 @@ load_dotenv()
 # Initialize database connection
 @st.cache_resource(show_spinner=False)
 def init_database():
-    return DatabaseManager()
+    """
+    Create DatabaseManager with Supabase credentials.
+    Tries Streamlit secrets first (cloud), then .env (local).
+    """
+    url = None
+    key = None
+
+    # Try secrets (Streamlit Cloud)
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+    except KeyError:
+        pass
+
+    # Fallback to environment variables (local .env)
+    if not url or not key:
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+
+    # If still missing, show a clear error and stop
+    if not url or not key:
+        st.error("🚨 Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_KEY in .env or Streamlit secrets.")
+        st.stop()
+
+    return DatabaseManager(url=url, key=key)
+
 
 class GrowLeafyApp:
     def __init__(self):
         self.db = init_database()
         self.initialize_session_state()
         self.load_css()
-        
+
     def initialize_session_state(self):
         """Initialize and manage session state for fluid navigation"""
         if 'current_page' not in st.session_state:
@@ -59,14 +84,14 @@ class GrowLeafyApp:
                 st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
         except FileNotFoundError:
             st.warning("Styling file not found. Create `assets/styles.css` for the fluid experience.")
-            
+
     def render_sidebar(self):
         """Render a polished, fluid sidebar navigation"""
         with st.sidebar:
             st.markdown("<h1 style='text-align: center; color: #2e7d32;'>🌿 GrowLeafy</h1>", unsafe_allow_html=True)
             st.markdown("<p style='text-align: center; color: gray; font-size: 0.9em; margin-top: -15px;'>Nursery Management</p>", unsafe_allow_html=True)
             st.markdown("---")
-            
+
             # Navigation menu
             menu_items = {
                 "Dashboard": "📊 Dashboard",
@@ -79,20 +104,20 @@ class GrowLeafyApp:
                 "Reports": "📈 Reports",
                 "AI Assistant": "🤖 AI Assistant"
             }
-            
+
             st.markdown("### Navigation")
             for page_key, label in menu_items.items():
                 # Visual indicator for the active page
                 is_active = st.session_state.current_page == page_key
                 button_type = "primary" if is_active else "secondary"
-                
+
                 if st.button(label, key=page_key, use_container_width=True, type=button_type):
                     if st.session_state.current_page != page_key:
                         st.session_state.current_page = page_key
-                        st.rerun() # Force a fluid re-render
-                    
+                        st.rerun()
+
             st.markdown("---")
-            
+
             # Settings Expander (Keeps sidebar clean)
             with st.expander("⚙️ Application Settings", expanded=False):
                 new_theme = st.selectbox(
@@ -105,7 +130,7 @@ class GrowLeafyApp:
                     st.toast(f"Theme switched to {new_theme} mode!", icon="🎨")
                     time.sleep(0.5)
                     st.rerun()
-                    
+
                 new_ai_state = st.checkbox(
                     "Enable AI Assistant",
                     value=st.session_state.ai_enabled
@@ -117,11 +142,11 @@ class GrowLeafyApp:
 
             # Footer
             st.markdown("<div style='text-align: center; margin-top: 50px; color: gray; font-size: 0.8em;'>© 2024 GrowLeafy v1.0.0</div>", unsafe_allow_html=True)
-            
+
     def render_main_content(self):
         """Render main content with a fade-in container"""
         current_page = st.session_state.current_page
-        
+
         page_components = {
             "Dashboard": dashboard.render,
             "Plant Database": plant_database.render,
@@ -133,21 +158,22 @@ class GrowLeafyApp:
             "Reports": reports.render,
             "AI Assistant": ai_chat.render
         }
-        
+
         # Wrap content in a styled div for CSS animations
         st.markdown('<div class="fluid-container">', unsafe_allow_html=True)
-        
+
         if current_page in page_components:
             if current_page == "AI Assistant" and not st.session_state.ai_enabled:
                 st.warning("The AI Assistant is currently disabled in your settings.")
             else:
                 page_components[current_page](self.db)
-                
+
         st.markdown('</div>', unsafe_allow_html=True)
-            
+
     def run(self):
         self.render_sidebar()
         self.render_main_content()
+
 
 if __name__ == "__main__":
     app = GrowLeafyApp()
