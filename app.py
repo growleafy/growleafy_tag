@@ -5,8 +5,18 @@ Main Application Entry Point
 
 import streamlit as st
 import os
+import time
 from dotenv import load_dotenv
 from utils.database import DatabaseManager
+
+# Page configuration MUST be the first Streamlit command
+st.set_page_config(
+    page_title="GrowLeafy | Nursery Hub",
+    page_icon="🌿",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 from components import (
     dashboard,
     plant_database,
@@ -22,84 +32,94 @@ from components import (
 # Load environment variables
 load_dotenv()
 
-# Page configuration
-st.set_page_config(
-    page_title="GrowLeafy - Plant Tag Generator & Nursery Database",
-    page_icon="🌿",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Load custom CSS
-def load_css():
-    with open('assets/styles.css') as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
-
 # Initialize database connection
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def init_database():
     return DatabaseManager()
 
-# Main Application Class
 class GrowLeafyApp:
     def __init__(self):
         self.db = init_database()
         self.initialize_session_state()
+        self.load_css()
         
     def initialize_session_state(self):
-        """Initialize session state variables"""
+        """Initialize and manage session state for fluid navigation"""
         if 'current_page' not in st.session_state:
             st.session_state.current_page = "Dashboard"
         if 'theme' not in st.session_state:
-            st.session_state.theme = "light"
+            st.session_state.theme = "Light"
         if 'ai_enabled' not in st.session_state:
             st.session_state.ai_enabled = True
+
+    def load_css(self):
+        """Inject custom CSS for smooth animations and fluid layout"""
+        try:
+            with open('assets/styles.css') as f:
+                st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+        except FileNotFoundError:
+            st.warning("Styling file not found. Create `assets/styles.css` for the fluid experience.")
             
     def render_sidebar(self):
-        """Render sidebar navigation"""
+        """Render a polished, fluid sidebar navigation"""
         with st.sidebar:
-            st.image("https://via.placeholder.com/150x50?text=GrowLeafy", width=150)
-            st.title("🌿 GrowLeafy")
-            
-            # Navigation menu
+            st.markdown("<h1 style='text-align: center; color: #2e7d32;'>🌿 GrowLeafy</h1>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: gray; font-size: 0.9em; margin-top: -15px;'>Nursery Management</p>", unsafe_allow_html=True)
             st.markdown("---")
             
+            # Navigation menu
             menu_items = {
-                "📊 Dashboard": "Dashboard",
-                "🌱 Plant Database": "Plant Database",
-                "🧪 Fertilizer Database": "Fertilizer Database",
-                "🐛 Insecticide Database": "Insecticide Database",
-                "🛡️ Pesticide Database": "Pesticide Database",
-                "🏷️ Tag Generator": "Tag Generator",
-                "🔍 Advanced Search": "Advanced Search",
-                "📈 Reports": "Reports",
-                "🤖 AI Assistant": "AI Assistant"
+                "Dashboard": "📊 Dashboard",
+                "Plant Database": "🌱 Plant Database",
+                "Fertilizer Database": "🧪 Fertilizer Database",
+                "Insecticide Database": "🐛 Insecticide Database",
+                "Pesticide Database": "🛡️ Pesticide Database",
+                "Tag Generator": "🏷️ Tag Generator",
+                "Advanced Search": "🔍 Advanced Search",
+                "Reports": "📈 Reports",
+                "AI Assistant": "🤖 AI Assistant"
             }
             
-            for label, page in menu_items.items():
-                if st.button(label, key=page, use_container_width=True):
-                    st.session_state.current_page = page
+            st.markdown("### Navigation")
+            for page_key, label in menu_items.items():
+                # Visual indicator for the active page
+                is_active = st.session_state.current_page == page_key
+                button_type = "primary" if is_active else "secondary"
+                
+                if st.button(label, key=page_key, use_container_width=True, type=button_type):
+                    if st.session_state.current_page != page_key:
+                        st.session_state.current_page = page_key
+                        st.rerun() # Force a fluid re-render
                     
             st.markdown("---")
             
-            # Settings
-            st.subheader("⚙️ Settings")
-            st.session_state.theme = st.selectbox(
-                "Theme",
-                ["Light", "Dark"],
-                index=0 if st.session_state.theme == "light" else 1
-            )
-            st.session_state.ai_enabled = st.checkbox(
-                "Enable AI Assistant",
-                value=st.session_state.ai_enabled
-            )
-            
+            # Settings Expander (Keeps sidebar clean)
+            with st.expander("⚙️ Application Settings", expanded=False):
+                new_theme = st.selectbox(
+                    "Theme",
+                    ["Light", "Dark"],
+                    index=0 if st.session_state.theme == "Light" else 1
+                )
+                if new_theme != st.session_state.theme:
+                    st.session_state.theme = new_theme
+                    st.toast(f"Theme switched to {new_theme} mode!", icon="🎨")
+                    time.sleep(0.5)
+                    st.rerun()
+                    
+                new_ai_state = st.checkbox(
+                    "Enable AI Assistant",
+                    value=st.session_state.ai_enabled
+                )
+                if new_ai_state != st.session_state.ai_enabled:
+                    st.session_state.ai_enabled = new_ai_state
+                    status = "enabled" if new_ai_state else "disabled"
+                    st.toast(f"AI Assistant {status}.", icon="🤖")
+
             # Footer
-            st.markdown("---")
-            st.markdown("© 2024 GrowLeafy | v1.0.0")
+            st.markdown("<div style='text-align: center; margin-top: 50px; color: gray; font-size: 0.8em;'>© 2024 GrowLeafy v1.0.0</div>", unsafe_allow_html=True)
             
     def render_main_content(self):
-        """Render main content based on selected page"""
+        """Render main content with a fade-in container"""
         current_page = st.session_state.current_page
         
         page_components = {
@@ -114,16 +134,21 @@ class GrowLeafyApp:
             "AI Assistant": ai_chat.render
         }
         
+        # Wrap content in a styled div for CSS animations
+        st.markdown('<div class="fluid-container">', unsafe_allow_html=True)
+        
         if current_page in page_components:
-            page_components[current_page](self.db)
+            if current_page == "AI Assistant" and not st.session_state.ai_enabled:
+                st.warning("The AI Assistant is currently disabled in your settings.")
+            else:
+                page_components[current_page](self.db)
+                
+        st.markdown('</div>', unsafe_allow_html=True)
             
     def run(self):
-        """Run the application"""
-        load_css()
         self.render_sidebar()
         self.render_main_content()
 
-# Application entry point
 if __name__ == "__main__":
     app = GrowLeafyApp()
     app.run()
