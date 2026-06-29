@@ -1,3 +1,4 @@
+import uuid
 class DatabaseManager:
     def __init__(self, url, key):
         # your existing init...
