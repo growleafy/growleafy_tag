@@ -50,7 +50,6 @@ class DataProvider:
 
 class MockProvider(DataProvider):
     def fetch(self, params):
-        # Added name_bn (Bengali names) and image_url for testing
         db = params.get("database", "Plants")
         if db == "Plants":
             return pd.DataFrame({
@@ -141,21 +140,18 @@ class RenderEngine:
         """Draw a single label. If lang='bn', looks for '{field_name}_bn'."""
         c.setFillColor(self.template.color)
         
-        # Process fields
         for fld in self.template.fields:
             field_name = fld["field"]
             field_type = fld.get("type", "text")
             
-            # For bilingual support, swap to Bengali data if it exists
             lookup_name = field_name
             if lang == 'bn' and f"{field_name}_bn" in row:
                 lookup_name = f"{field_name}_bn"
             
             pos_x = x + fld["x"] * mm
-            pos_y = y + lbl_h + fld["y"] * mm  # y offset from top-left of label
+            pos_y = y + lbl_h + fld["y"] * mm
             
             if field_type == "image":
-                # Draw Image on label
                 img_url = str(row.get(field_name, ""))
                 try:
                     if img_url and img_url != "nan":
@@ -165,17 +161,16 @@ class RenderEngine:
                         img_w_mm = fld.get("width", 15) * mm
                         img_h_mm = fld.get("height", 15) * mm
                         c.drawImage(img_reader, pos_x, pos_y, width=img_w_mm, height=img_h_mm, preserveAspectRatio=True)
-                except Exception as e:
-                    pass # Silently fail on image fetch so PDF doesn't crash
+                except Exception:
+                    pass
             else:
-                # Draw Text
                 text = str(row.get(lookup_name, ""))
                 if "prefix" in fld:
                     text = fld["prefix"] + text
                 c.setFont(self.template.font_name + ("-Bold" if fld.get("bold") else ""), fld.get("font_size", self.template.font_size))
                 c.drawString(pos_x, pos_y, text)
 
-        # QR code (independent of language)
+        # QR code
         if self.template.include_qr:
             qr = qrcode.QRCode(version=1, box_size=10, border=1)
             qr.add_data(f"https://growleafy.com/item/{row.get('sku', 'UNKNOWN')}")
@@ -203,7 +198,6 @@ class RenderEngine:
             os.unlink(tmp.name)
 
     def _render_page_a4(self, c, dataframe, lang='en'):
-        """Renders a grid of labels on a single A4 page for a specific language."""
         page_w, page_h = A4
         lbl_w = self.template.width * mm
         lbl_h = self.template.height * mm
@@ -238,7 +232,6 @@ class RenderEngine:
                     row_idx = 0
                     
     def render_pdf_a4_sheet(self, dataframe: pd.DataFrame) -> io.BytesIO:
-        """Handles standard A4 or Bilingual (2-page) A4 generation."""
         buffer = io.BytesIO()
         c = canvas.Canvas(buffer, pagesize=A4)
         
@@ -255,7 +248,6 @@ class RenderEngine:
         return buffer
 
     def render_pdf_continuous_roll(self, dataframe: pd.DataFrame, lang='en') -> io.BytesIO:
-        """Single long page representing a continuous roll."""
         buffer = io.BytesIO()
         roll_w_mm = self.template.roll_width
         roll_h_mm = 5000
@@ -281,26 +273,20 @@ class RenderEngine:
 
     def render_zpl(self, dataframe: pd.DataFrame) -> str:
         zpl = "^XA\n"
-        lbl_w_dots = int(self.template.width * 8)
-        lbl_h_dots = int(self.template.height * 8)
         for _, row in dataframe.iterrows():
             zpl += f"^FO10,10^A0N,20,20^FD{row.get('name','')}^FS\n"
             zpl += f"^FO10,30^A0N,18,18^FDSKU:{row.get('sku','')}^FS\n"
             if self.template.include_qr:
                 qr_data = f"https://growleafy.com/item/{row.get('sku','UNKNOWN')}"
-                zpl += f"^FO{lbl_w_dots-200},10^BQN,2,5^FDQA,{qr_data}^FS\n"
+                zpl += f"^FO{int(self.template.width*8)-200},10^BQN,2,5^FDQA,{qr_data}^FS\n"
             zpl += "^XZ\n"
         return zpl
 
     def render_svg_preview(self, dataframe: pd.DataFrame, max_items=8) -> str:
-        """FIXED: Wraps perfectly based on container width to stop overflowing endpoints."""
         if not HAS_SVGWRITE:
             return "<svg></svg>"
-        
-        # Preview settings
-        max_width_px = 780  # Safe boundary for Streamlit width
+        max_width_px = 780
         dwg = svgwrite.Drawing(size=("800px", "600px"))
-        
         lbl_w_px = self.template.width * 3
         lbl_h_px = self.template.height * 3
         gap_x_px = 5
@@ -309,38 +295,25 @@ class RenderEngine:
         margin_y_px = 10
         
         x, y = margin_x_px, margin_y_px
-        count = 0
-        
         for _, row in dataframe.head(max_items).iterrows():
-            # Check if this label fits on current row, if not, wrap to next line
             if x + lbl_w_px > max_width_px:
                 x = margin_x_px
                 y += lbl_h_px + gap_y_px
-            
-            # Draw Box
             dwg.add(dwg.rect(insert=(x, y), size=(lbl_w_px, lbl_h_px), fill="white", stroke="gray"))
-            
-            # Draw Texts (Mock scaled for preview)
             dwg.add(dwg.text(row.get("name", ""), insert=(x+5, y+20), font_size="12"))
             dwg.add(dwg.text(f"SKU:{row.get('sku', '')}", insert=(x+5, y+35), font_size="10"))
-            
-            # Advance X
             x += lbl_w_px + gap_x_px
-            count += 1
-            
         return dwg.tostring()
 
 # -----------------------------------------------------------------------------
-# 4. AI AUTO‑DESIGNER (DeepSeek stub)
+# 4. AI AUTO‑DESIGNER
 # -----------------------------------------------------------------------------
 class AIDesigner:
     @staticmethod
     def suggest_layout(dataframe: pd.DataFrame, user_prompt: str = "") -> LabelTemplate:
-        # Mock AI logic
         avg_name_len = dataframe["name"].str.len().mean() if "name" in dataframe else 10
         suggested_width = max(40, min(100, 20 + int(avg_name_len * 1.2)))
         suggested_cols = 3 if suggested_width < 65 else 2
-        
         fields = [
             {"field": "image_url", "type": "image", "x": 2, "y": -5, "width": 20, "height": 25},
             {"field": "name", "type": "text", "x": 25, "y": -10, "font_size": 10, "bold": True},
@@ -354,9 +327,11 @@ class AIDesigner:
         )
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT UI
+# 5. STREAMLIT UI - FIXED SIGNATURE
 # -----------------------------------------------------------------------------
-def render():
+def render(db_manager=None):
+    # THIS IS THE FIX: Added db_manager=None so your app.py can call render(self.db) without crashing.
+    
     st.set_page_config(layout="wide")
     st.title("🏷️ Universal Advanced Tag & Label Generator")
     st.caption("Enterprise‑grade: AI design, Bilingual (EN/BN), Image tags, Multi‑format output")
@@ -371,7 +346,6 @@ def render():
 
     template = st.session_state.current_template
 
-    # ---------- TAB 1: DATA SOURCE ----------
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Data Source", "🎨 Label Designer", "🤖 AI Auto‑Design",
         "⚙️ Output & Format", "🖨️ Preview & Export"
@@ -380,7 +354,6 @@ def render():
     with tab1:
         st.subheader("Select & Prepare Data")
         source_type = st.radio("Data Source", ["Mock", "CSV Upload"], horizontal=True)
-        provider = None
         if source_type == "CSV Upload":
             uploaded = st.file_uploader("Upload CSV", type="csv")
             if uploaded:
@@ -388,7 +361,7 @@ def render():
                 df = provider.fetch({"file": uploaded})
                 st.session_state.dataframe = df
             else:
-                st.info("Upload a CSV to begin (Add `name_bn`, `image_url` columns for features)")
+                st.info("Upload a CSV to begin")
         else:
             provider = MockProvider()
             selected_db = st.selectbox("Mock Database", ["Plants", "Inventory"])
@@ -400,7 +373,6 @@ def render():
             edited_df = st.data_editor(st.session_state.dataframe, num_rows="dynamic", use_container_width=True, hide_index=True)
             st.session_state.dataframe = edited_df
 
-    # ---------- TAB 2: LABEL DESIGNER ----------
     with tab2:
         st.subheader("Design Your Label")
         col_left, col_right = st.columns([2, 1])
@@ -414,9 +386,7 @@ def render():
                 template.gap_y = st.number_input("Vertical Gap (mm)", value=template.gap_y)
                 template.cols = st.number_input("Columns", value=template.cols, min_value=1)
                 template.rows = st.number_input("Rows", value=template.rows, min_value=1)
-            
-            with st.expander("✨ Fields & Positioning (Text & Images)"):
-                st.write("Define fields (JSON). Use `type: 'text'` or `type: 'image'`")
+            with st.expander("✨ Fields & Positioning", expanded=True):
                 fields_json = st.text_area("Fields (JSON)", value=json.dumps(template.fields, indent=2), height=250)
                 try:
                     template.fields = json.loads(fields_json)
@@ -436,10 +406,9 @@ def render():
             template.show_crop_marks = st.toggle("Show Crop Marks", value=template.show_crop_marks)
         st.session_state.current_template = template
 
-    # ---------- TAB 3: AI AUTO‑DESIGN ----------
     with tab3:
         st.subheader("🤖 AI‑Powered Layout Suggestion")
-        user_prompt = st.text_area("Describe your needs (optional)", placeholder="e.g., Include large image on left side, put price in bold")
+        user_prompt = st.text_area("Describe your needs (optional)")
         if st.button("✨ Generate AI Design", use_container_width=True):
             if not st.session_state.dataframe.empty:
                 with st.spinner("Consulting DeepSeek AI..."):
@@ -449,15 +418,11 @@ def render():
                     st.json(suggested.to_dict())
             else:
                 st.warning("Load data first")
-        st.info("🔌 DeepSeek API placeholder – integrate your key to get real AI layouts.")
 
-    # ---------- TAB 4: OUTPUT & FORMAT ----------
     with tab4:
         st.subheader("Output Settings")
-        
-        # Font loader for Bengali / Unicode
         st.markdown("#### 🔤 Unicode Font Setup (Required for Bengali)")
-        uploaded_font = st.file_uploader("Upload a Unicode .ttf font (e.g., Noto Sans Bengali)", type=["ttf"])
+        uploaded_font = st.file_uploader("Upload a Unicode .ttf font", type=["ttf"])
         if uploaded_font and HAS_TTFONT:
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".ttf") as tmp:
@@ -469,38 +434,24 @@ def render():
                     st.success("Unicode font loaded successfully!")
             except Exception as e:
                 st.error(f"Failed to load font: {e}")
-        elif not HAS_TTFONT:
-            st.warning("`reportlab` is missing TTFont support. Reinstall with `pip install reportlab`")
-        elif not uploaded_font:
-            st.info("If labels show squares, upload a valid .ttf font above.")
-
-        st.markdown("---")
         
         template.output_format = st.selectbox("Print Format", ["A4_sheet", "continuous_roll", "ZPL"])
-        
-        # Bilingual toggle
         if template.output_format == "A4_sheet":
-            lang_mode = st.radio("Language Mode", [
-                "English Only", 
-                "Bilingual Double-Sided A4 (English Front, Bengali Back)"
-            ])
-            template.bilingual_mode = (lang_mode == "Bilingual Double-Sided A4 (English Front, Bengali Back)")
+            lang_mode = st.radio("Language Mode", ["English Only", "Bilingual Double-Sided A4"])
+            template.bilingual_mode = (lang_mode == "Bilingual Double-Sided A4")
         else:
             template.bilingual_mode = False
-            lang = st.radio("Language", ["English", "Bengali"])
-        
+
         if template.output_format == "continuous_roll":
             template.roll_width = st.number_input("Roll Width (mm)", value=template.roll_width)
             template.roll_gap = st.number_input("Gap Between Labels (mm)", value=template.roll_gap)
-            st.info("Continuous roll PDF – no page breaks, just a long strip.")
         if template.output_format == "ZPL":
-            st.info("ZPL code will be generated. Use with Zebra printers.")
+            st.info("ZPL code will be generated for Zebra printers.")
             
         copies = st.number_input("Copies per item", value=1, min_value=1)
         st.session_state.copies = copies
         st.session_state.current_template = template
 
-    # ---------- TAB 5: PREVIEW & EXPORT ----------
     with tab5:
         st.subheader("Preview & Generate")
         if st.session_state.dataframe.empty:
@@ -513,43 +464,26 @@ def render():
         col_a, col_b, col_c = st.columns(3)
         col_a.metric("Total Items", len(full_df))
         if template.output_format == "A4_sheet":
-            items_per_page = template.cols * template.rows
-            pages = max(1, (len(full_df) + items_per_page - 1) // items_per_page)
-            if template.bilingual_mode:
-                pages *= 2  # One EN page, one BN page
+            pages = max(1, (len(full_df) + (template.cols * template.rows) - 1) // (template.cols * template.rows))
+            if template.bilingual_mode: pages *= 2
             col_b.metric("Pages (A4)", pages)
-        else:
-            col_b.metric("Format", template.output_format)
 
-        # Fixed SVG Preview
         if HAS_SVGWRITE:
             svg_str = engine.render_svg_preview(full_df, max_items=8)
             st.markdown("#### Live SVG Preview (Auto-wrapped)")
             st.image(f"data:image/svg+xml;base64,{base64.b64encode(svg_str.encode()).decode()}", use_column_width=True)
-        else:
-            st.info("Install `svgwrite` for live preview.")
 
-        # Generate buttons
         if st.button("🚀 Generate & Download", type="primary", use_container_width=True):
             with st.status("Rendering...", expanded=True) as status:
                 if template.output_format == "A4_sheet":
                     buf = engine.render_pdf_a4_sheet(full_df)
-                    mime = "application/pdf"
-                    fname = "labels_a4.pdf"
+                    mime, fname = "application/pdf", "labels_a4.pdf"
                 elif template.output_format == "continuous_roll":
                     buf = engine.render_pdf_continuous_roll(full_df)
-                    mime = "application/pdf"
-                    fname = "labels_roll.pdf"
+                    mime, fname = "application/pdf", "labels_roll.pdf"
                 elif template.output_format == "ZPL":
                     zpl_code = engine.render_zpl(full_df)
                     buf = io.BytesIO(zpl_code.encode())
-                    mime = "text/plain"
-                    fname = "labels.zpl"
-                else:
-                    st.error("Unknown format")
-                    return
+                    mime, fname = "text/plain", "labels.zpl"
                 status.update(label="Ready!", state="complete")
                 st.download_button("📥 Download", data=buf, file_name=fname, mime=mime, use_container_width=True)
-
-if __name__ == "__main__":
-    render()
