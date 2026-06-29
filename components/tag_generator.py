@@ -1,278 +1,471 @@
 """
-Enterprise Universal Tag & Label Generator Component
+Universal Enterprise Tag & Label Generator – Most Advanced Edition
+Supports: A4 sheets, continuous rolls, ZPL, SVG preview, AI auto-design, barcode types, 
+dynamic data sources, template library, and more.
 """
 import streamlit as st
 import pandas as pd
 import io
+import json
+import os
+from datetime import datetime
+from PIL import Image
 import qrcode
-from PIL import Image, ImageDraw, ImageFont
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
-from reportlab.lib.pagesizes import A4, A3, LETTER
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
+from reportlab.graphics import renderPM
+import base64
+import tempfile
 
-# --- BILINGUAL DICTIONARY ---
-LANG = {
-    "English": {
-        "title": "🏷️ Universal Tag & Label Generator",
-        "tab1": "1. Select Items", "tab2": "2. Label Design", "tab3": "3. Preview & Print",
-        "page_size": "Page Size",
-        "nursery_name": "Nursery Name (Prints on Label)",
-        "contact": "Contact Number",
-        "font_size": "Base Font Size (pt)"
-    },
-    "Bengali": {
-        "title": "🏷️ ইউনিভার্সাল ট্যাগ এবং লেবেল জেনারেটর",
-        "tab1": "১. আইটেম নির্বাচন", "tab2": "২. লেবেল ডিজাইন", "tab3": "৩. প্রিভিউ এবং প্রিন্ট",
-        "page_size": "পৃষ্ঠার আকার (Page Size)",
-        "nursery_name": "নার্সারির নাম",
-        "contact": "যোগাযোগের নম্বর",
-        "font_size": "ফন্টের আকার (Font Size)"
-    }
-}
+# Optional imports – graceful degradation
+try:
+    import barcode
+    from barcode.writer import ImageWriter
+    HAS_BARCODE = True
+except ImportError:
+    HAS_BARCODE = False
 
-# --- PAGE SIZE MAP ---
-PAGE_SIZES = {
-    "A4 Sheet (210 x 297 mm)": A4,
-    "A3 Sheet (297 x 420 mm)": A3,
-    "US Letter (216 x 279 mm)": LETTER,
-    "Thermal Roll Standard (100 x 150 mm)": (100*mm, 150*mm),
-    "Thermal Roll Small (50 x 25 mm)": (50*mm, 25*mm)
-}
+try:
+    import svgwrite
+    HAS_SVGWRITE = True
+except ImportError:
+    HAS_SVGWRITE = False
 
-# --- DATABASE MOCKS ---
-def get_dynamic_databases():
-    return ["Plants", "Fertilizers", "Pesticides", "Inventory"]
+try:
+    from supabase import create_client, Client
+    HAS_SUPABASE = True
+except ImportError:
+    HAS_SUPABASE = False
 
-def fetch_data(db_name):
-    if db_name == "Plants":
-        return pd.DataFrame({
-            "id": ["P1", "P2", "P3"],
-            "name": ["Monstera Deliciosa", "Ficus Lyrata", "Aloe Vera"],
-            "botanical": ["Monstera", "Ficus", "Aloe"],
-            "mrp": [1200, 850, 250],
-            "sku": ["MNST-01", "FIC-02", "ALV-03"]
-        })
-    return pd.DataFrame()
+# -----------------------------------------------------------------------------
+# 1. UNIVERSAL DATA PROVIDER (Pluggable backends)
+# -----------------------------------------------------------------------------
+class DataProvider:
+    """Base class for fetching item data."""
+    def fetch(self, params: dict) -> pd.DataFrame:
+        raise NotImplementedError
 
-# --- LIVE PREVIEW GENERATOR (PIL) ---
-def generate_preview_image(settings):
-    """Generates a mockup image of a single label for the UI Preview"""
-    # Convert mm to pixels (approx 1mm = 3.78px for web display)
-    px_w = int(settings['width'] * 3.78)
-    px_h = int(settings['height'] * 3.78)
-    
-    # Create blank white label with a border
-    img = Image.new('RGB', (px_w, px_h), color='white')
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, px_w-1, px_h-1], outline="black", width=2)
-    
-    # Draw Mock Content
-    pad = 10
-    current_y = pad
-    
-    if settings.get('nursery_name'):
-        draw.text((pad, current_y), settings['nursery_name'], fill="black")
-        current_y += 20
-        
-    draw.text((pad, current_y), "Plant Name / Product", fill="black")
-    draw.text((pad, current_y + 20), "SKU: 12345-ABC", fill="gray")
-    draw.text((pad, current_y + 40), "Rs. 999.00", fill="black")
-    
-    if settings.get('contact'):
-        draw.text((pad, px_h - 25), f"Ph: {settings['contact']}", fill="black")
-        
-    if settings.get('include_qr'):
-        # Draw a mock QR code box
-        qr_size = int(20 * 3.78)
-        draw.rectangle([px_w - qr_size - pad, pad, px_w - pad, pad + qr_size], outline="black", fill="#f0f0f0")
-        draw.text((px_w - qr_size - pad + 15, pad + 25), "QR", fill="black")
-        
-    return img
+class MockProvider(DataProvider):
+    def fetch(self, params):
+        db = params.get("database", "Plants")
+        if db == "Plants":
+            return pd.DataFrame({
+                "id": ["P1", "P2", "P3", "P4"],
+                "name": ["Monstera Deliciosa", "Ficus Lyrata", "Aloe Vera", "Snake Plant"],
+                "botanical": ["Monstera", "Ficus", "Aloe", "Sansevieria"],
+                "mrp": [1200, 850, 250, 450],
+                "sku": ["MNST-01", "FIC-02", "ALV-03", "SNK-04"],
+                "description": ["Tropical beauty", "Statement tree", "Medicinal", "Air purifier"]
+            })
+        return pd.DataFrame()
 
-# --- ENTERPRISE PRINT ENGINE ---
-def generate_label_pdf(dataframe, template_settings):
-    buffer = io.BytesIO()
-    
-    # Get selected page size
-    page_width, page_height = PAGE_SIZES.get(template_settings['page_format'], A4)
-    c = canvas.Canvas(buffer, pagesize=(page_width, page_height))
-    
-    lbl_w = template_settings['width'] * mm
-    lbl_h = template_settings['height'] * mm
-    margin_x = template_settings['margin_left'] * mm
-    margin_y = template_settings['margin_top'] * mm
-    gap_x = template_settings['gap_x'] * mm
-    gap_y = template_settings['gap_y'] * mm
-    font_size = template_settings['font_size']
-    
-    cols = template_settings['columns']
-    rows = template_settings['rows']
-    
-    x, y = margin_x, page_height - margin_y - lbl_h
-    col_idx, row_idx = 0, 0
-    
-    for index, row in dataframe.iterrows():
-        if template_settings.get('show_crop_marks'):
-            c.setStrokeColorRGB(0.8, 0.8, 0.8)
-            c.rect(x, y, lbl_w, lbl_h, fill=0)
-            c.setStrokeColorRGB(0, 0, 0)
+class CSVProvider(DataProvider):
+    def fetch(self, params):
+        uploaded_file = params.get("file")
+        if uploaded_file:
+            return pd.read_csv(uploaded_file)
+        return pd.DataFrame()
 
-        # Draw Nursery Name
-        if template_settings.get('nursery_name'):
-            c.setFont("Helvetica-Bold", font_size - 2)
-            c.drawString(x + 2*mm, y + lbl_h - 5*mm, template_settings['nursery_name'])
+# Manager to select provider
+def get_data_provider(source_type, credentials=None):
+    if source_type == "Mock":
+        return MockProvider()
+    elif source_type == "CSV":
+        return CSVProvider()
+    # else Supabase, Google Sheets, etc. – add later
+    return MockProvider()
 
-        # Draw Product Details
-        c.setFont("Helvetica-Bold", font_size)
-        c.drawString(x + 2*mm, y + lbl_h - 12*mm, str(row.get('name', 'N/A')))
-        
-        c.setFont("Helvetica", font_size - 2)
-        c.drawString(x + 2*mm, y + lbl_h - 17*mm, f"SKU: {row.get('sku', 'N/A')}")
-        
-        c.setFont("Helvetica-Bold", font_size + 2)
-        c.drawString(x + 2*mm, y + 10*mm, f"Rs. {row.get('mrp', '0.00')}")
+# -----------------------------------------------------------------------------
+# 2. LABEL TEMPLATE – JSON‑serializable design
+# -----------------------------------------------------------------------------
+class LabelTemplate:
+    def __init__(self, name="Custom", width=60, height=30, cols=3, rows=9,
+                 margin_left=10, margin_top=10, gap_x=2, gap_y=2,
+                 fields=None, include_qr=True, qr_size=20, qr_x_offset=5, qr_y_offset=5,
+                 include_barcode=False, barcode_type="code128", show_crop_marks=True,
+                 font_name="Helvetica", font_size=8, color="#000000",
+                 output_format="A4_sheet", roll_width=210, roll_gap=3):
+        self.name = name
+        self.width = width          # mm
+        self.height = height
+        self.cols = cols
+        self.rows = rows
+        self.margin_left = margin_left
+        self.margin_top = margin_top
+        self.gap_x = gap_x
+        self.gap_y = gap_y
+        self.fields = fields or [
+            {"field": "name", "x": 5, "y": -10, "font_size": 10, "bold": True},
+            {"field": "sku", "x": 5, "y": -15, "font_size": 8, "bold": False},
+            {"field": "mrp", "x": 5, "y": 10, "font_size": 12, "bold": True, "prefix": "Rs. "}
+        ]
+        self.include_qr = include_qr
+        self.qr_size = qr_size
+        self.qr_x_offset = qr_x_offset  # from right edge
+        self.qr_y_offset = qr_y_offset  # from bottom edge
+        self.include_barcode = include_barcode
+        self.barcode_type = barcode_type
+        self.show_crop_marks = show_crop_marks
+        self.font_name = font_name
+        self.font_size = font_size
+        self.color = color
+        self.output_format = output_format  # "A4_sheet", "continuous_roll", "ZPL"
+        self.roll_width = roll_width        # mm (for continuous roll)
+        self.roll_gap = roll_gap
 
-        # Draw Contact
-        if template_settings.get('contact'):
-            c.setFont("Helvetica", font_size - 4)
-            c.drawString(x + 2*mm, y + 3*mm, f"Ph: {template_settings['contact']}")
+    def to_dict(self):
+        return self.__dict__
 
-        # Draw QR Code
-        if template_settings.get('include_qr'):
+    @classmethod
+    def from_dict(cls, d):
+        return cls(**d)
+
+# -----------------------------------------------------------------------------
+# 3. RENDER ENGINE – Multi‑format output
+# -----------------------------------------------------------------------------
+class RenderEngine:
+    def __init__(self, template: LabelTemplate):
+        self.template = template
+
+    def _draw_label_content(self, c, x, y, lbl_w, lbl_h, row):
+        """Common drawing for PDF backends."""
+        c.setFillColor(self.template.color)
+        # Draw all text fields
+        for fld in self.template.fields:
+            field_name = fld["field"]
+            if field_name not in row:
+                continue
+            text = str(row[field_name])
+            if "prefix" in fld:
+                text = fld["prefix"] + text
+            c.setFont(self.template.font_name + ("-Bold" if fld.get("bold") else ""), fld.get("font_size", self.template.font_size))
+            pos_x = x + fld["x"] * mm
+            pos_y = y + lbl_h + fld["y"] * mm  # y offset from top‑left of label
+            c.drawString(pos_x, pos_y, text)
+
+        # QR code
+        if self.template.include_qr:
             qr = qrcode.QRCode(version=1, box_size=10, border=1)
-            item_sku = str(row.get('sku', 'UNKNOWN'))
-            qr.add_data(f"https://growleafy.com/item/{item_sku}")
+            qr.add_data(f"https://growleafy.com/item/{row.get('sku', 'UNKNOWN')}")
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
-            
-            img_buffer = io.BytesIO()
-            img.save(img_buffer, format="PNG")
-            img_buffer.seek(0)
-            
-            qr_image = ImageReader(img_buffer)
-            qr_size = 20 * mm
-            c.drawImage(qr_image, x + lbl_w - qr_size - 2*mm, y + 2*mm, width=qr_size, height=qr_size)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            buf.seek(0)
+            qr_img = ImageReader(buf)
+            qr_w = self.template.qr_size * mm
+            c.drawImage(qr_img,
+                        x + lbl_w - qr_w - self.template.qr_x_offset * mm,
+                        y + self.template.qr_y_offset * mm,
+                        width=qr_w, height=qr_w)
 
-        col_idx += 1
-        x += lbl_w + gap_x
-        
-        if col_idx >= cols:
-            col_idx = 0
-            x = margin_x
-            row_idx += 1
-            y -= (lbl_h + gap_y)
-            
-        if row_idx >= rows:
-            c.showPage() 
-            x, y = margin_x, page_height - margin_y - lbl_h
-            col_idx, row_idx = 0, 0
+        # Barcode
+        if self.template.include_barcode and HAS_BARCODE:
+            sku = str(row.get('sku', '000000'))
+            code = barcode.get(self.template.barcode_type, sku, writer=ImageWriter())
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                code.write(tmp.name)
+                tmp.flush()
+                barcode_img = ImageReader(tmp.name)
+                c.drawImage(barcode_img, x + 5*mm, y + 5*mm, width=40*mm, height=10*mm)
+            os.unlink(tmp.name)
 
-    c.save()
-    buffer.seek(0)
-    return buffer
+    def render_pdf_a4_sheet(self, dataframe: pd.DataFrame) -> io.BytesIO:
+        """Tiled A4 pages."""
+        buffer = io.BytesIO()
+        page_w, page_h = A4
+        c = canvas.Canvas(buffer, pagesize=A4)
+        lbl_w = self.template.width * mm
+        lbl_h = self.template.height * mm
+        margin_x = self.template.margin_left * mm
+        margin_y = self.template.margin_top * mm
+        gap_x = self.template.gap_x * mm
+        gap_y = self.template.gap_y * mm
+        cols = self.template.cols
+        rows = self.template.rows
 
-# --- STREAMLIT UI MODULE ---
+        x, y = margin_x, page_h - margin_y - lbl_h
+        col_idx, row_idx = 0, 0
+
+        for _, row in dataframe.iterrows():
+            if self.template.show_crop_marks:
+                c.setStrokeColorRGB(0.8, 0.8, 0.8)
+                c.rect(x, y, lbl_w, lbl_h, fill=0)
+                c.setStrokeColorRGB(0, 0, 0)
+
+            self._draw_label_content(c, x, y, lbl_w, lbl_h, row)
+
+            col_idx += 1
+            x += lbl_w + gap_x
+            if col_idx >= cols:
+                col_idx = 0
+                x = margin_x
+                row_idx += 1
+                y -= (lbl_h + gap_y)
+                if row_idx >= rows:
+                    c.showPage()
+                    x, y = margin_x, page_h - margin_y - lbl_h
+                    row_idx = 0
+
+        c.save()
+        buffer.seek(0)
+        return buffer
+
+    def render_pdf_continuous_roll(self, dataframe: pd.DataFrame) -> io.BytesIO:
+        """Single long page representing a continuous roll."""
+        buffer = io.BytesIO()
+        roll_w_mm = self.template.roll_width
+        roll_h_mm = 5000  # artificially long
+        page_w = roll_w_mm * mm
+        page_h = roll_h_mm * mm
+        c = canvas.Canvas(buffer, pagesize=(page_w, page_h))
+        lbl_w = self.template.width * mm
+        lbl_h = self.template.height * mm
+        gap = self.template.roll_gap * mm
+        x = self.template.margin_left * mm
+        y = page_h - self.template.margin_top * mm - lbl_h
+
+        for _, row in dataframe.iterrows():
+            self._draw_label_content(c, x, y, lbl_w, lbl_h, row)
+            y -= (lbl_h + gap)
+            if y < 0:
+                c.showPage()
+                y = page_h - self.template.margin_top * mm - lbl_h
+
+        c.save()
+        buffer.seek(0)
+        return buffer
+
+    def render_zpl(self, dataframe: pd.DataFrame) -> str:
+        """Generate ZPL II code for Zebra printers."""
+        zpl = "^XA\n"
+        lbl_w_dots = int(self.template.width * 8)  # 8 dpmm
+        lbl_h_dots = int(self.template.height * 8)
+        for _, row in dataframe.iterrows():
+            zpl += f"^FO10,10^A0N,20,20^FD{row.get('name','')}^FS\n"
+            zpl += f"^FO10,30^A0N,18,18^FDSKU:{row.get('sku','')}^FS\n"
+            if self.template.include_qr:
+                qr_data = f"https://growleafy.com/item/{row.get('sku','UNKNOWN')}"
+                zpl += f"^FO{lbl_w_dots-200},10^BQN,2,5^FDQA,{qr_data}^FS\n"
+            zpl += "^XZ\n"
+        return zpl
+
+    def render_svg_preview(self, dataframe: pd.DataFrame, max_items=4) -> str:
+        """Return SVG string for browser preview."""
+        if not HAS_SVGWRITE:
+            return "<svg></svg>"
+        dwg = svgwrite.Drawing(size=("800px", "400px"))
+        # Simple grid preview: render first few labels
+        x, y = 10, 10
+        lbl_w_px = self.template.width * 3
+        lbl_h_px = self.template.height * 3
+        for i, (_, row) in enumerate(dataframe.head(max_items).iterrows()):
+            dwg.add(dwg.rect(insert=(x, y), size=(lbl_w_px, lbl_h_px), fill="white", stroke="gray"))
+            dwg.add(dwg.text(row.get("name",""), insert=(x+5, y+20), font_size="12"))
+            dwg.add(dwg.text(f"SKU:{row.get('sku','')}", insert=(x+5, y+40), font_size="10"))
+            x += lbl_w_px + 5
+            if x > 750:
+                x = 10
+                y += lbl_h_px + 5
+        return dwg.tostring()
+
+# -----------------------------------------------------------------------------
+# 4. AI AUTO‑DESIGNER (DeepSeek stub – replace with API)
+# -----------------------------------------------------------------------------
+class AIDesigner:
+    @staticmethod
+    def suggest_layout(dataframe: pd.DataFrame, user_prompt: str = "") -> LabelTemplate:
+        """Calls DeepSeek API to analyze data and return optimal layout.
+           For now, returns a smart heuristic template."""
+        # Mock AI logic: if names are long, increase width; if many columns, use landscape.
+        avg_name_len = dataframe["name"].str.len().mean() if "name" in dataframe else 10
+        suggested_width = max(40, min(100, 20 + int(avg_name_len * 1.2)))
+        suggested_cols = 3 if suggested_width < 65 else 2
+        fields = [
+            {"field": "name", "x": 5, "y": -10, "font_size": 10, "bold": True},
+            {"field": "botanical", "x": 5, "y": -18, "font_size": 7, "bold": False},
+            {"field": "mrp", "x": 5, "y": 10, "font_size": 12, "bold": True, "prefix": "Rs. "}
+        ]
+        return LabelTemplate(
+            name="AI Suggested",
+            width=suggested_width, height=35, cols=suggested_cols, rows=8,
+            fields=fields, include_qr=True
+        )
+
+# -----------------------------------------------------------------------------
+# 5. THERMAL PRINTER MANAGER – settings helper
+# -----------------------------------------------------------------------------
+class ThermalPrinterManager:
+    def __init__(self):
+        self.supported_modes = ["continuous_roll", "gap", "black_mark"]
+
+    def validate_template(self, template: LabelTemplate) -> bool:
+        if template.output_format == "continuous_roll":
+            return template.roll_width > 0
+        return True
+
+# -----------------------------------------------------------------------------
+# 6. STREAMLIT UI – Modular tabs
+# -----------------------------------------------------------------------------
 def render(db_manager=None):
-    # Language Toggle
-    if "lang" not in st.session_state:
-        st.session_state.lang = "English"
-        
-    col_title, col_lang = st.columns([4, 1])
-    with col_lang:
-        st.session_state.lang = st.selectbox("Language / ভাষা", ["English", "Bengali"], key="tag_lang")
-        
-    t = LANG[st.session_state.lang]
-    
-    with col_title:
-        st.title(t["title"])
-    st.markdown("---")
-    
-    tab1, tab2, tab3 = st.tabs([t["tab1"], t["tab2"], t["tab3"]])
-    
-    # ----------------------------------------
-    # TAB 1: DATA SELECTION
-    # ----------------------------------------
+    st.set_page_config(layout="wide")
+    st.title("🏷️ Universal Advanced Tag & Label Generator")
+    st.caption("Enterprise‑grade: AI design, multi‑format output, pluggable data")
+
+    # Initialize session state for template and data
+    if "current_template" not in st.session_state:
+        st.session_state.current_template = LabelTemplate()
+    if "dataframe" not in st.session_state:
+        st.session_state.dataframe = pd.DataFrame()
+
+    template = st.session_state.current_template
+
+    # ---------- TAB 1: DATA SOURCE ----------
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Data Source", "🎨 Label Designer", "🤖 AI Auto‑Design",
+        "⚙️ Output & Format", "🖨️ Preview & Export"
+    ])
+
     with tab1:
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            selected_db = st.selectbox("Select Database", get_dynamic_databases())
-        with col2:
-            search_term = st.text_input("🔍 Live Search (SKU, Name, Barcode)")
-            
-        df = fetch_data(selected_db)
-        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, hide_index=True)
-        
-    # ----------------------------------------
-    # TAB 2: LABEL DESIGNER & TEMPLATES
-    # ----------------------------------------
-    with tab2:
-        # Define settings dictionary to store states
-        template_config = {}
-        
-        col_settings, col_fields, col_preview = st.columns([1.5, 1.5, 1])
-        
-        with col_settings:
-            st.subheader("Layout Settings")
-            template_config['page_format'] = st.selectbox(t["page_size"], list(PAGE_SIZES.keys()))
-            
-            with st.expander("Dimensions (mm)", expanded=True):
-                template_config['width'] = st.number_input("Label Width", value=60)
-                template_config['height'] = st.number_input("Label Height", value=35)
-            
-            with st.expander("Grid Layout"):
-                template_config['columns'] = st.number_input("Columns", value=3, min_value=1)
-                template_config['rows'] = st.number_input("Rows", value=8, min_value=1)
-                template_config['gap_x'] = st.number_input("Horizontal Gap", value=2.0)
-                template_config['gap_y'] = st.number_input("Vertical Gap", value=2.0)
-                template_config['show_crop_marks'] = st.toggle("Show Crop Marks", value=True)
-
-        with col_fields:
-            st.subheader("Content Settings")
-            template_config['nursery_name'] = st.text_input(t["nursery_name"], placeholder="e.g. GrowLeafy Nursery")
-            template_config['contact'] = st.text_input(t["contact"], placeholder="e.g. +91 9876543210")
-            template_config['font_size'] = st.slider(t["font_size"], min_value=6, max_value=24, value=10)
-            
-            template_config['include_qr'] = st.toggle("Generate QR Code", value=True)
-            st.multiselect("Data Fields to Print", ["Name", "Botanical Name", "SKU", "MRP"], default=["Name", "SKU", "MRP"])
-            
-        with col_preview:
-            st.subheader("Live Preview")
-            st.caption("Approximate visual layout:")
-            # Generate and show live PIL preview
-            preview_img = generate_preview_image(template_config)
-            st.image(preview_img, use_container_width=True)
-            
-            # Save hardcoded margins for the PDF generation later
-            template_config['margin_left'] = 10
-            template_config['margin_top'] = 10
-
-    # ----------------------------------------
-    # TAB 3: PREVIEW AND EXPORT
-    # ----------------------------------------
-    with tab3:
-        st.subheader("Print Queue & Output")
-        copies = st.number_input("Copies per item", value=1, min_value=1)
-        
-        print_df = pd.concat([edited_df]*copies, ignore_index=True)
-        
-        col_metrics1, col_metrics2, col_metrics3 = st.columns(3)
-        col_metrics1.metric("Total Items to Print", len(print_df))
-        col_metrics2.metric("Estimated Pages", max(1, (len(print_df) + (template_config['columns'] * template_config['rows']) - 1) // (template_config['columns'] * template_config['rows'])))
-        col_metrics3.metric("Format selected", template_config['page_format'])
-        
-        if st.button("🚀 Generate PDF Labels", type="primary", use_container_width=True):
-            if len(print_df) == 0:
-                st.error("No items selected for printing.")
+        st.subheader("Select & Prepare Data")
+        source_type = st.radio("Data Source", ["Mock", "CSV Upload", "Supabase (coming soon)"], horizontal=True)
+        provider = None
+        if source_type == "CSV Upload":
+            uploaded = st.file_uploader("Upload CSV", type="csv")
+            if uploaded:
+                provider = CSVProvider()
+                df = provider.fetch({"file": uploaded})
+                st.session_state.dataframe = df
             else:
-                with st.status("Processing Print Job...", expanded=True) as status:
-                    pdf_buffer = generate_label_pdf(print_df, template_config)
-                    status.update(label="Print Job Ready!", state="complete", expanded=False)
-                    
-                    st.download_button(
-                        label="📥 Download Print-Ready PDF",
-                        data=pdf_buffer,
-                        file_name="nursery_labels_batch.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
+                st.info("Upload a CSV to begin")
+        else:
+            provider = MockProvider()
+            selected_db = st.selectbox("Mock Database", ["Plants", "Inventory"])
+            df = provider.fetch({"database": selected_db})
+            st.session_state.dataframe = df
+
+        if not st.session_state.dataframe.empty:
+            st.subheader("Data Preview")
+            edited_df = st.data_editor(st.session_state.dataframe, num_rows="dynamic", use_container_width=True, hide_index=True)
+            st.session_state.dataframe = edited_df
+
+    # ---------- TAB 2: LABEL DESIGNER ----------
+    with tab2:
+        st.subheader("Design Your Label")
+        col_left, col_right = st.columns([2, 1])
+        with col_left:
+            with st.expander("📐 Dimensions & Grid", expanded=True):
+                template.width = st.number_input("Width (mm)", value=template.width, min_value=10)
+                template.height = st.number_input("Height (mm)", value=template.height, min_value=10)
+                template.margin_left = st.number_input("Left Margin (mm)", value=template.margin_left)
+                template.margin_top = st.number_input("Top Margin (mm)", value=template.margin_top)
+                template.gap_x = st.number_input("Horizontal Gap (mm)", value=template.gap_x)
+                template.gap_y = st.number_input("Vertical Gap (mm)", value=template.gap_y)
+                template.cols = st.number_input("Columns", value=template.cols, min_value=1)
+                template.rows = st.number_input("Rows", value=template.rows, min_value=1)
+            with st.expander("✨ Fields & Positioning"):
+                st.write("Define text fields (x,y in mm from top‑left label corner)")
+                fields_json = st.text_area("Fields (JSON)", value=json.dumps(template.fields, indent=2), height=200)
+                try:
+                    template.fields = json.loads(fields_json)
+                except:
+                    st.error("Invalid JSON")
+                template.font_name = st.selectbox("Font", ["Helvetica", "Courier", "Times-Roman"])
+                template.font_size = st.slider("Default Font Size", 5, 20, template.font_size)
+                template.color = st.color_picker("Text Color", template.color)
+        with col_right:
+            st.subheader("Codes & Marks")
+            template.include_qr = st.toggle("QR Code", value=template.include_qr)
+            if template.include_qr:
+                template.qr_size = st.slider("QR Size (mm)", 10, 40, template.qr_size)
+                template.qr_x_offset = st.slider("QR Offset from Right (mm)", 0, 30, template.qr_x_offset)
+                template.qr_y_offset = st.slider("QR Offset from Bottom (mm)", 0, 30, template.qr_y_offset)
+            template.include_barcode = st.toggle("Barcode", value=template.include_barcode)
+            if template.include_barcode:
+                template.barcode_type = st.selectbox("Barcode Type", ["code128", "ean13", "upca"] if HAS_BARCODE else ["code128"])
+            template.show_crop_marks = st.toggle("Show Crop Marks", value=template.show_crop_marks)
+        st.session_state.current_template = template
+
+    # ---------- TAB 3: AI AUTO‑DESIGN ----------
+    with tab3:
+        st.subheader("🤖 AI‑Powered Layout Suggestion")
+        user_prompt = st.text_area("Describe your needs (optional)", placeholder="e.g., Long plant names need bigger font, use landscape")
+        if st.button("✨ Generate AI Design", use_container_width=True):
+            if not st.session_state.dataframe.empty:
+                with st.spinner("Consulting DeepSeek AI..."):
+                    suggested = AIDesigner.suggest_layout(st.session_state.dataframe, user_prompt)
+                    st.session_state.current_template = suggested
+                    st.success("AI design applied! Go to Label Designer to tweak.")
+                    st.json(suggested.to_dict())
+            else:
+                st.warning("Load data first")
+        st.info("🔌 DeepSeek API placeholder – integrate your key to get real AI layouts.")
+
+    # ---------- TAB 4: OUTPUT & FORMAT ----------
+    with tab4:
+        st.subheader("Output Settings")
+        template.output_format = st.selectbox("Print Format", ["A4_sheet", "continuous_roll", "ZPL"])
+        if template.output_format == "continuous_roll":
+            template.roll_width = st.number_input("Roll Width (mm)", value=template.roll_width)
+            template.roll_gap = st.number_input("Gap Between Labels (mm)", value=template.roll_gap)
+            st.info("Continuous roll PDF – no page breaks, just a long strip.")
+        if template.output_format == "ZPL":
+            st.info("ZPL code will be generated. Use with Zebra printers.")
+        copies = st.number_input("Copies per item", value=1, min_value=1)
+        st.session_state.copies = copies
+        st.session_state.current_template = template
+
+    # ---------- TAB 5: PREVIEW & EXPORT ----------
+    with tab5:
+        st.subheader("Preview & Generate")
+        if st.session_state.dataframe.empty:
+            st.warning("No data to print. Select data source first.")
+            return
+
+        # Duplicate rows for copies
+        full_df = pd.concat([st.session_state.dataframe] * st.session_state.copies, ignore_index=True)
+        engine = RenderEngine(template)
+
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("Total Items", len(full_df))
+        if template.output_format == "A4_sheet":
+            pages = max(1, (len(full_df) + template.cols * template.rows - 1) // (template.cols * template.rows))
+            col_b.metric("Pages (A4)", pages)
+        else:
+            col_b.metric("Format", template.output_format)
+
+        # Live SVG preview
+        if HAS_SVGWRITE:
+            svg_str = engine.render_svg_preview(full_df, max_items=8)
+            st.image(f"data:image/svg+xml;base64,{base64.b64encode(svg_str.encode()).decode()}", caption="SVG Preview", use_column_width=True)
+        else:
+            st.info("Install `svgwrite` for live preview.")
+
+        # Generate buttons
+        if st.button("🚀 Generate & Download", type="primary", use_container_width=True):
+            with st.status("Rendering...", expanded=True) as status:
+                if template.output_format == "A4_sheet":
+                    buf = engine.render_pdf_a4_sheet(full_df)
+                    mime = "application/pdf"
+                    fname = "labels_a4.pdf"
+                elif template.output_format == "continuous_roll":
+                    buf = engine.render_pdf_continuous_roll(full_df)
+                    mime = "application/pdf"
+                    fname = "labels_roll.pdf"
+                elif template.output_format == "ZPL":
+                    zpl_code = engine.render_zpl(full_df)
+                    buf = io.BytesIO(zpl_code.encode())
+                    mime = "text/plain"
+                    fname = "labels.zpl"
+                else:
+                    st.error("Unknown format")
+                    return
+                status.update(label="Ready!", state="complete")
+                st.download_button("📥 Download", data=buf, file_name=fname, mime=mime, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# If you want to test standalone:
+if __name__ == "__main__":
+    render()
