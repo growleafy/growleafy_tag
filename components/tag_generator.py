@@ -1,3 +1,6 @@
+"""
+Enterprise Universal Tag & Label Generator Component
+"""
 import streamlit as st
 import pandas as pd
 import io
@@ -6,15 +9,14 @@ from PIL import Image
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 from reportlab.lib.pagesizes import A4
-from reportlab.graphics.shapes import Drawing
-from reportlab.graphics.barcode import createBarcodeDrawing
+from reportlab.lib.utils import ImageReader  # <-- The critical fix for in-memory images!
 
-# --- ARCHITECTURAL MOCKS (Replace with actual Supabase client calls) ---
+# --- DATABASE MOCKS (Replace with actual Supabase client calls later) ---
 def get_dynamic_databases():
     return ["Plants", "Fertilizers", "Pesticides", "Inventory"]
 
 def fetch_data(db_name):
-    # Mock data representing a 100k+ row database fetched via pagination
+    # Mock data representing a database fetch
     if db_name == "Plants":
         return pd.DataFrame({
             "id": ["P1", "P2", "P3"],
@@ -25,19 +27,18 @@ def fetch_data(db_name):
         })
     return pd.DataFrame()
 
-# --- PRINT ENGINE ---
+# --- ENTERPRISE PRINT ENGINE ---
 def generate_label_pdf(dataframe, template_settings):
     """
-    Enterprise Print Layout Engine
     Calculates grid, margins, and renders vectors via ReportLab.
     """
     buffer = io.BytesIO()
     
-    # Page setup
+    # Page setup (Default A4)
     page_width, page_height = A4 
     c = canvas.Canvas(buffer, pagesize=A4)
     
-    # Settings
+    # Grid Settings
     lbl_w = template_settings['width'] * mm
     lbl_h = template_settings['height'] * mm
     margin_x = template_settings['margin_left'] * mm
@@ -48,11 +49,12 @@ def generate_label_pdf(dataframe, template_settings):
     cols = template_settings['columns']
     rows = template_settings['rows']
     
+    # Starting Coordinates (Top-Left)
     x, y = margin_x, page_height - margin_y - lbl_h
     col_idx, row_idx = 0, 0
     
     for index, row in dataframe.iterrows():
-        # Draw Crop Marks (Bleed)
+        # Draw Crop Marks (Bleed Area)
         if template_settings.get('show_crop_marks'):
             c.setStrokeColorRGB(0.8, 0.8, 0.8)
             c.rect(x, y, lbl_w, lbl_h, fill=0)
@@ -68,23 +70,27 @@ def generate_label_pdf(dataframe, template_settings):
         c.setFont("Helvetica-Bold", 12)
         c.drawString(x + 5*mm, y + 10*mm, f"Rs. {row.get('mrp', '0.00')}")
 
-        # 2. Draw QR Code
+        # 2. Draw QR Code (Safely handled in memory)
         if template_settings.get('include_qr'):
             qr = qrcode.QRCode(version=1, box_size=10, border=1)
-            qr.add_data(f"https://growleafy.com/item/{row.get('sku')}")
+            item_sku = str(row.get('sku', 'UNKNOWN'))
+            qr.add_data(f"https://growleafy.com/item/{item_sku}")
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
             
-            # Save QR to temp buffer to draw on canvas
+            # Save to temporary memory buffer
             img_buffer = io.BytesIO()
             img.save(img_buffer, format="PNG")
             img_buffer.seek(0)
             
-            # Position QR at the right side of the label
+            # Use ImageReader to tell ReportLab this is raw image data, not a file path
+            qr_image = ImageReader(img_buffer)
+            
+            # Position QR at the bottom-right of the label
             qr_size = 20 * mm
-            c.drawImage(Image.open(img_buffer), x + lbl_w - qr_size - 5*mm, y + 5*mm, width=qr_size, height=qr_size)
+            c.drawImage(qr_image, x + lbl_w - qr_size - 5*mm, y + 5*mm, width=qr_size, height=qr_size)
 
-        # Grid Calculation Logic
+        # 3. Grid Calculation Logic (Move to next label position)
         col_idx += 1
         x += lbl_w + gap_x
         
@@ -94,8 +100,9 @@ def generate_label_pdf(dataframe, template_settings):
             row_idx += 1
             y -= (lbl_h + gap_y)
             
+        # Create a new page if we exceed rows
         if row_idx >= rows:
-            c.showPage() # Create new page
+            c.showPage() 
             x, y = margin_x, page_height - margin_y - lbl_h
             col_idx, row_idx = 0, 0
 
@@ -120,11 +127,9 @@ def render(db_manager=None):
         with col2:
             search_term = st.text_input("🔍 Live Search (SKU, Name, Barcode)")
             
-        # Fetch data based on selection
         df = fetch_data(selected_db)
         
         st.subheader("Data Selection")
-        # st.data_editor allows multi-select via a checkbox column in newer Streamlit versions
         edited_df = st.data_editor(
             df,
             num_rows="dynamic",
@@ -141,7 +146,7 @@ def render(db_manager=None):
             st.selectbox("Load Saved Template", ["Custom", "Standard Plant Tag (2x1)", "Thermal Barcode (50x25mm)"])
         with col_ai:
             if st.button("✨ AI Auto-Design", use_container_width=True):
-                st.toast("DeepSeek AI is analyzing your data to suggest optimal layouts...", icon="🤖")
+                st.toast("AI is analyzing your data to suggest optimal layouts...", icon="🤖")
         
         st.markdown("---")
         
@@ -149,12 +154,12 @@ def render(db_manager=None):
         with col_settings:
             st.subheader("Page & Grid Settings")
             with st.expander("Dimensions (mm)", expanded=True):
-                lbl_w = st.number_input("Label Width", value=50)
-                lbl_h = st.number_input("Label Height", value=25)
+                lbl_w = st.number_input("Label Width", value=60)
+                lbl_h = st.number_input("Label Height", value=30)
             
             with st.expander("Grid Layout"):
-                cols = st.number_input("Columns", value=4, min_value=1)
-                rows = st.number_input("Rows", value=10, min_value=1)
+                cols = st.number_input("Columns", value=3, min_value=1)
+                rows = st.number_input("Rows", value=9, min_value=1)
                 gap_x = st.number_input("Horizontal Gap", value=2.0)
                 gap_y = st.number_input("Vertical Gap", value=2.0)
                 crop_marks = st.toggle("Show Crop Marks", value=True)
@@ -165,7 +170,6 @@ def render(db_manager=None):
             include_barcode = st.toggle("Generate Barcode (SKU)", value=False)
             
             st.multiselect("Data Fields to Print", ["Name", "Botanical Name", "SKU", "MRP", "Care Instructions"], default=["Name", "SKU", "MRP"])
-            
             st.color_picker("Primary Label Color", "#000000")
 
     # ----------------------------------------
@@ -175,7 +179,6 @@ def render(db_manager=None):
         st.subheader("Print Queue & Output")
         copies = st.number_input("Copies per item", value=1, min_value=1)
         
-        # Prepare data (multiply by copies)
         print_df = pd.concat([edited_df]*copies, ignore_index=True)
         
         template_config = {
@@ -189,32 +192,30 @@ def render(db_manager=None):
         
         col_metrics1, col_metrics2, col_metrics3 = st.columns(3)
         col_metrics1.metric("Total Items to Print", len(print_df))
-        col_metrics2.metric("Estimated Pages", max(1, len(print_df) // (cols * rows)))
+        col_metrics2.metric("Estimated Pages", max(1, (len(print_df) + (cols * rows) - 1) // (cols * rows)))
         col_metrics3.metric("Format", "A4 Sheet")
         
         st.info("Visual preview of Page 1 will render here in a production environment.")
         
         if st.button("🚀 Generate PDF Labels", type="primary", use_container_width=True):
-            with st.status("Processing Print Job...", expanded=True) as status:
-                st.write("Calculatng grid geometry...")
-                st.write(f"Generating {len(print_df)} QR Codes...")
-                st.write("Rendering Vector PDF via ReportLab...")
-                
-                # Generate File
-                pdf_buffer = generate_label_pdf(print_df, template_config)
-                
-                status.update(label="Print Job Ready!", state="complete", expanded=False)
-                
-                st.download_button(
-                    label="📥 Download Print-Ready PDF",
-                    data=pdf_buffer,
-                    file_name="nursery_labels_batch.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-                
-                # Log to Supabase logic goes here
-                st.toast("Print job logged to Audit History", icon="✅")
-
-if __name__ == "__main__":
-    render()
+            if len(print_df) == 0:
+                st.error("No items selected for printing.")
+            else:
+                with st.status("Processing Print Job...", expanded=True) as status:
+                    st.write("Calculating grid geometry...")
+                    st.write(f"Generating {len(print_df)} labels...")
+                    st.write("Rendering Vector PDF via ReportLab...")
+                    
+                    pdf_buffer = generate_label_pdf(print_df, template_config)
+                    
+                    status.update(label="Print Job Ready!", state="complete", expanded=False)
+                    
+                    st.download_button(
+                        label="📥 Download Print-Ready PDF",
+                        data=pdf_buffer,
+                        file_name="nursery_labels_batch.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                    
+                    st.toast("Print job logged successfully!", icon="✅")
