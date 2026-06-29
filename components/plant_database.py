@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 import io
 
-# Bilingual Dictionaries
+# --- Bilingual Dictionaries ---
 LANG = {
     "English": {
         "title": "🌱 Plant Database",
@@ -43,7 +43,6 @@ def generate_excel_template(language):
     """Generates an empty Excel file with the correct headers in memory"""
     output = io.BytesIO()
     
-    # Define headers based on language
     if language == "Bengali":
         headers = ["সাধারণ নাম (Name)", "বৈজ্ঞানিক নাম (Botanical)", "বিভাগ (Category)", "খুচরা মূল্য (MRP)", "স্টক (Stock)"]
     else:
@@ -51,35 +50,75 @@ def generate_excel_template(language):
         
     df = pd.DataFrame(columns=headers)
     
-    # Write to BytesIO buffer
+    # Write to BytesIO buffer using xlsxwriter
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Template')
         
+        # Optional: Auto-adjust column widths for better formatting
+        worksheet = writer.sheets['Template']
+        for i, col in enumerate(df.columns):
+            worksheet.set_column(i, i, max(len(col) + 5, 15))
+            
     return output.getvalue()
 
 def render(db):
-    # Language Toggle
+    # Initialize language in session state if not present
+    if "lang" not in st.session_state:
+        st.session_state.lang = "English"
+
+    # Header & Language Toggle
     col_title, col_lang = st.columns([3, 1])
     with col_lang:
-        st.session_state.lang = st.selectbox("Language / ভাষা", ["English", "Bengali"], key="plant_lang")
+        st.session_state.lang = st.selectbox(
+            "Language / ভাষা", 
+            ["English", "Bengali"], 
+            index=0 if st.session_state.lang == "English" else 1,
+            key="plant_lang_selector"
+        )
     
-    t = LANG[st.session_state.lang] # Load translations
+    t = LANG[st.session_state.lang]
     
     with col_title:
         st.title(t["title"])
     st.markdown("---")
     
+    # Tabs Setup
     tab1, tab2, tab3 = st.tabs([t["view"], t["add_single"], t["add_bulk"]])
     
-    # TAB 1: VIEW & EXPORT
+    # ==========================================
+    # TAB 1: VIEW INVENTORY & EXPORT EXCEL
+    # ==========================================
     with tab1:
         st.subheader(t["view"])
-        st.info("Inventory will appear here. Connect to DB.")
-        # Example Export Button (Assuming db.get_plants() returns a dataframe)
-        # current_data = db.get_plants()
-        # st.download_button("Export Database to Excel", data=current_data.to_excel(), ...)
         
-    # TAB 2: SINGLE ENTRY + IMAGE
+        try:
+            # Fetch data from Supabase (Modify this to match your actual db method)
+            # Example: plants_data = db.get_all_plants()
+            plants_data = db.get_recent_items(limit=100).get('plants', []) 
+            
+            if plants_data:
+                df = pd.DataFrame(plants_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                # Excel Export Button
+                export_buffer = io.BytesIO()
+                with pd.ExcelWriter(export_buffer, engine='xlsxwriter') as writer:
+                    df.to_excel(writer, index=False, sheet_name='Inventory')
+                
+                st.download_button(
+                    label="📥 Export Inventory to Excel",
+                    data=export_buffer.getvalue(),
+                    file_name="plant_inventory.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.info("No plants found in the database. Add some using the tabs above!")
+        except Exception as e:
+             st.info("Your inventory table will appear here once connected to your DatabaseManager fetching method.")
+
+    # ==========================================
+    # TAB 2: ADD SINGLE PLANT + IMAGE UPLOAD
+    # ==========================================
     with tab2:
         st.subheader(t["add_single"])
         with st.form("add_plant_form"):
@@ -93,29 +132,39 @@ def render(db):
                 stock = st.number_input(t["stock"], min_value=0, step=1)
                 image_file = st.file_uploader(t["image"], type=["jpg", "png", "jpeg"])
                 
-            submitted = st.form_submit_button(t["save"], use_container_width=True)
+            submitted = st.form_submit_button(t["save"], type="primary", use_container_width=True)
             
             if submitted:
                 if plant_name and mrp:
                     image_url = None
+                    
+                    # 1. Handle Image Upload to Supabase
                     if image_file is not None:
-                        # ---------------------------------------------------------
-                        # PLACEHOLDER: Cloud Storage Logic Goes Here
-                        # st.info(f"Processing image: {image_file.name}")
-                        # image_url = upload_to_drive_or_supabase(image_file)
-                        # ---------------------------------------------------------
-                        pass
-                        
+                        with st.spinner("Uploading image to Supabase..."):
+                            file_bytes = image_file.getvalue()
+                            image_url = db.upload_image(file_bytes, image_file.name)
+                            
+                            if not image_url:
+                                st.error("Image upload failed, but saving plant data anyway.")
+                                
+                    # 2. Save Data to Database
+                    # Replace with your actual db insert method:
+                    # db.insert_plant(plant_name, botanical_name, category, mrp, stock, image_url)
+                    
                     st.success(f"Successfully added {plant_name}!")
+                    if image_url:
+                        st.caption(f"Image successfully stored at: {image_url}")
                 else:
                     st.error("Please fill in all required fields (*).")
 
-    # TAB 3: BULK UPLOAD EXCEL
+    # ==========================================
+    # TAB 3: BULK UPLOAD VIA EXCEL
+    # ==========================================
     with tab3:
         st.subheader(t["add_bulk"])
-        st.write("1. Download the blank template. 2. Fill it out on your computer. 3. Upload it back here.")
+        st.markdown("1. Download the blank template.\n2. Fill it out on your computer.\n3. Upload it back here.")
         
-        # Download Template
+        # 1. Download Template
         excel_data = generate_excel_template(st.session_state.lang)
         st.download_button(
             label=t["dl_template"],
@@ -126,16 +175,18 @@ def render(db):
         
         st.markdown("---")
         
-        # Upload Filled Template
+        # 2. Upload Filled Template
         uploaded_excel = st.file_uploader(t["upload_excel"], type=["xlsx", "xls"])
+        
         if uploaded_excel is not None:
             try:
                 bulk_df = pd.read_excel(uploaded_excel)
                 st.write("Preview of your data:")
-                st.dataframe(bulk_df)
+                st.dataframe(bulk_df, use_container_width=True)
                 
                 if st.button("Process & Save Bulk Data", type="primary"):
                     # Process dataframe and send to Supabase
+                    # Example: db.insert_bulk_plants(bulk_df.to_dict('records'))
                     st.success(f"Successfully processed {len(bulk_df)} rows!")
             except Exception as e:
-                st.error(f"Error reading Excel file: {e}")
+                st.error(f"Error reading Excel file. Please ensure you are using the downloaded template. Details: {e}")
