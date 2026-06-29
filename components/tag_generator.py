@@ -1,5 +1,5 @@
 """
-Universal Advanced Tag Generator – Hard Anchor Fix, Overlap Prevention & Auto-Validation
+Ultimate Tag Generator – Absolute Coordinate Math Engine & Hard Validation
 """
 import streamlit as st
 import pandas as pd
@@ -100,7 +100,7 @@ class LabelTemplate:
         self.margin_top = margin_top
         self.gap_x = gap_x
         self.gap_y = gap_y
-        # Safe default fields with proper spacing
+        # Safe default fields
         self.fields = fields or [
             {"field": "image_url", "type": "image", "x": 2, "y": 5, "width": 20, "height": 20},
             {"field": "name", "type": "text", "x": 25, "y": 22, "font_size": 10, "bold": True},
@@ -135,58 +135,53 @@ class LabelTemplate:
         return cls(**d)
 
 # -----------------------------------------------------------------------------
-# 3. PRECISION RENDER ENGINE (PDF & SVG MATCH 1:1)
+# 3. PRECISION COORDINATE ENGINE
 # -----------------------------------------------------------------------------
 class RenderEngine:
     def __init__(self, template: LabelTemplate):
         self.template = template
 
     def calculate_minimum_required_height(self):
-        """Math behind the strict height validation."""
         if not self.template.fields:
-            return 20 # Minimum safety
+            return 20
         
         y_values = [f.get("y", 0) for f in self.template.fields]
-        max_y = max(y_values)  # Topmost element (largest Y)
-        min_y = min(y_values)  # Bottommost element (smallest Y)
-        field_height_span = max_y - min_y
+        max_y = max(y_values)
+        min_y = min(y_values)
         
-        # Padding overhead
         top_padding = 2.0
-        bottom_padding = 4.0
+        bottom_padding = 2.0
         
         if self.template.enable_header:
-            top_padding += 12.0 # 10mm for text, 2mm clearance
-            
+            top_padding += 12.0
         if self.template.enable_footer:
-            bottom_padding += 10.0 # 8mm for text, 2mm clearance
-        
-        # Calculate min required mm
-        min_height = bottom_padding + field_height_span + top_padding
-        
-        # Add a 4mm safety buffer
-        return int(min_height + 4)
+            bottom_padding += 10.0
+            
+        min_height = bottom_padding + (max_y - min_y) + top_padding
+        return int(min_height + 5)
 
     def _draw_label_content(self, c, x, y, lbl_w_mm, lbl_h_mm, row, lang='en'):
         lbl_w = lbl_w_mm * mm
         lbl_h = lbl_h_mm * mm
         
-        # Y is the TOP-LEFT of the current box. We need the BOTTOM-Y.
-        y_bottom = y + lbl_h
+        # ABSOLUTE ANCHORS FOR THE BOX
+        box_top_y = y
+        box_bottom_y = y + lbl_h
+        box_right_x = x + lbl_w
 
-        # 1. Branding Header (2mm from Top)
+        # 1. Branding Header (Top-Left, 2mm from top)
         if self.template.enable_header:
             c.setFont(self.template.font_name, 10)
             c.setFillColorRGB(0, 0, 0)
-            c.drawCentredString(x + lbl_w / 2, y + 2*mm, self.template.header_text)
+            c.drawCentredString(x + lbl_w / 2, box_top_y + 2*mm, self.template.header_text)
 
-        # 2. Branding Footer (2mm from Bottom)
+        # 2. Branding Footer (Bottom, 2mm from bottom)
         if self.template.enable_footer:
             c.setFont(self.template.font_name, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawCentredString(x + lbl_w / 2, y_bottom - 2*mm, self.template.footer_text)
+            c.drawCentredString(x + lbl_w / 2, box_bottom_y - 2*mm, self.template.footer_text)
 
-        # 3. Content Fields (Text and Images)
+        # 3. Content Fields
         for fld in self.template.fields:
             field_name = fld["field"]
             field_type = fld.get("type", "text")
@@ -198,11 +193,7 @@ class RenderEngine:
             if lang == 'bn' and f"{field_name}_bn" in row:
                 lookup_name = f"{field_name}_bn"
             
-            # Absolute X and Y positions
             pos_x = x + fld["x"] * mm
-            # CRITICAL MATH FIX: Offset from bottom edge means (Y_bottom - offset). 
-            # This prevents them from floating outside the box.
-            pos_y = y_bottom - (fld["y"] * mm)
             
             if field_type == "image":
                 img_url = str(row.get(field_name, ""))
@@ -213,7 +204,9 @@ class RenderEngine:
                         img_reader = ImageReader(img)
                         img_w_mm = fld.get("width", 15) * mm
                         img_h_mm = fld.get("height", 15) * mm
-                        c.drawImage(img_reader, pos_x, pos_y - img_h_mm, width=img_w_mm, height=img_h_mm, preserveAspectRatio=True)
+                        # IMAGE MATH: Offsets from bottom, but ReportLab draws Image Top-Left.
+                        pos_y = box_bottom_y - (fld["y"] * mm) - img_h_mm
+                        c.drawImage(img_reader, pos_x, pos_y, width=img_w_mm, height=img_h_mm, preserveAspectRatio=True)
                 except Exception:
                     pass
             else:
@@ -221,9 +214,11 @@ class RenderEngine:
                 if "prefix" in fld:
                     text = fld["prefix"] + text
                 c.setFont(self.template.font_name + ("-Bold" if fld.get("bold") else ""), fld.get("font_size", self.template.font_size))
+                # TEXT MATH: Baseline is offset from bottom.
+                pos_y = box_bottom_y - (fld["y"] * mm)
                 c.drawString(pos_x, pos_y, text)
 
-        # 4. QR Code (Aligned perfectly to Top-Right)
+        # 4. QR Code (Anchored precisely to Top-Right)
         if self.template.include_qr:
             qr = qrcode.QRCode(version=1, box_size=10, border=1)
             qr.add_data(f"https://growleafy.com/item/{row.get('sku', 'UNKNOWN')}")
@@ -234,12 +229,13 @@ class RenderEngine:
             buf.seek(0)
             qr_img = ImageReader(buf)
             qr_w = self.template.qr_size * mm
-            c.drawImage(qr_img,
-                        x + lbl_w - qr_w - self.template.qr_x_offset * mm,
-                        y + lbl_h - qr_w - self.template.qr_y_offset * mm,
-                        width=qr_w, height=qr_w)
+            qr_h = self.template.qr_size * mm
+            # QR MATH: Anchored from Top-Right
+            pos_x = box_right_x - qr_w - self.template.qr_x_offset * mm
+            pos_y = box_top_y + self.template.qr_y_offset * mm
+            c.drawImage(qr_img, pos_x, pos_y, width=qr_w, height=qr_h)
 
-        # 5. Barcode (Centered at bottom, 2mm from bottom edge)
+        # 5. Barcode (Anchored precisely to Bottom-Center, 2mm from bottom)
         if self.template.include_barcode and HAS_BARCODE:
             sku = str(row.get('sku', '000000'))
             code = barcode.get(self.template.barcode_type, sku, writer=ImageWriter())
@@ -251,7 +247,8 @@ class RenderEngine:
                 barcode_w_mm = min(40, lbl_w_mm - 10)
                 barcode_h_mm = 10
                 barcode_x = x + (lbl_w_mm - barcode_w_mm) / 2 * mm
-                barcode_y = y_bottom + 2 * mm # Unusual, but for Barcode, we want it *inside* the box, 2mm up from absolute bottom.
+                # BARCODE MATH: Bottom edge should be 2mm from box bottom. Top-Left of image is at Bottom - Height - 2mm.
+                barcode_y = box_bottom_y - (barcode_h_mm * mm) - (2 * mm)
                 
                 c.drawImage(barcode_img, barcode_x, barcode_y, width=barcode_w_mm*mm, height=barcode_h_mm*mm)
             os.unlink(tmp.name)
@@ -329,20 +326,17 @@ class RenderEngine:
             dwg.add(dwg.rect(insert=(x, y), size=(lbl_w_px, lbl_h_px), fill="white", stroke="#000000", stroke_width=2))
             
             for fld in self.template.fields:
-                field_type = fld.get("type", "text")
-                
                 if self.template.include_barcode and self.template.hide_sku_text_if_barcode and fld.get("field") == "sku":
                     continue
 
                 pos_x = x + fld["x"] * scale
                 
-                if field_type == "text":
+                if fld.get("type") == "text":
                     text = str(row.get(fld["field"], ""))
                     if "prefix" in fld:
                         text = fld["prefix"] + text
-                    
                     font_size = fld.get("font_size", self.template.font_size)
-                    # SVG coordinates perfectly mimic the fixed PDF math
+                    # SVG coordinates accurately mimic the strict math
                     pos_y = y + lbl_h_px - (fld["y"] * scale)
                     dwg.add(dwg.text(text, insert=(pos_x, pos_y), font_size=f"{font_size}px", fill="#000000", font_family="sans-serif"))
             
@@ -350,7 +344,7 @@ class RenderEngine:
                 barcode_w_px = min(40*scale, lbl_w_px - 20)
                 barcode_h_px = 10*scale
                 barcode_x = x + (lbl_w_px - barcode_w_px)/2
-                barcode_y = y + lbl_h_px - (2 * scale)
+                barcode_y = y + lbl_h_px - (barcode_h_px) - (2 * scale)
                 dwg.add(dwg.rect(insert=(barcode_x, barcode_y), size=(barcode_w_px, barcode_h_px), fill="#000000"))
 
             col_idx += 1
@@ -370,7 +364,7 @@ class RenderEngine:
 def render(db_manager=None):
     st.set_page_config(layout="wide")
     st.title("🏷️ Universal Advanced Tag & Label Generator")
-    st.caption("Strict Math Engine: No text overlaps, no floating data.")
+    st.caption("Absolute Anchor Math Engine: Barcodes and Texts are strictly pinned inside boxes.")
 
     if "current_template" not in st.session_state:
         st.session_state.current_template = LabelTemplate()
@@ -415,8 +409,8 @@ def render(db_manager=None):
                 template.cols = st.number_input("Columns", value=template.cols, min_value=1)
                 template.rows = st.number_input("Rows", value=template.rows, min_value=1)
             
-            with st.expander("✨ Fields & Positioning", expanded=True):
-                st.caption("`x` = offset from left. `y` = offset from bottom.")
+            with st.expander("✨ Fields & Positioning (y = offset from bottom)", expanded=True):
+                st.caption("`y` refers to mm away from the BOTTOM edge. If `y` is too close to `Height`, text gets squeezed.")
                 fields_json = st.text_area("Fields (JSON)", value=json.dumps(template.fields, indent=2), height=250)
                 try:
                     template.fields = json.loads(fields_json)
@@ -505,7 +499,7 @@ def render(db_manager=None):
         full_df = pd.concat([st.session_state.dataframe] * st.session_state.copies, ignore_index=True)
         engine = RenderEngine(template)
 
-        # VALIDATION ENGINE
+        # HARD VALIDATIONS
         page_w_mm = 210
         max_allowed_cols = int((page_w_mm - 2 * template.margin_left) / (template.width + template.gap_x))
         if template.cols > max_allowed_cols:
@@ -516,7 +510,7 @@ def render(db_manager=None):
         if template.height < min_required_height:
             st.error(
                 f"🚫 **Height Shortage Detected!** \n\n"
-                f"Your current Tag Height is **{template.height}mm**, but the layout requires **{min_required_height}mm** to fit all elements without overlapping.\n\n"
+                f"Your current Tag Height is **{template.height}mm**, but the layout requires **{min_required_height}mm** to fit all elements securely.\n\n"
                 f"👉 **Please increase the Height (mm) slider to at least {min_required_height}mm.**"
             )
             if st.button(f"✏️ Auto-Fix Height to {min_required_height}mm"):
@@ -524,8 +518,6 @@ def render(db_manager=None):
                 st.session_state.current_template = template
                 st.rerun()
             st.stop()
-        else:
-            st.success(f"✅ Layout Validated! Height {template.height}mm passes safety checks.")
 
         col_a, col_b, col_c = st.columns(3)
         col_a.metric("Total Items", len(full_df))
@@ -535,7 +527,7 @@ def render(db_manager=None):
             if template.bilingual_mode: pages *= 2
             col_b.metric("Pages (A4)", pages)
 
-        st.subheader("📌 Live Layout Preview (Matches PDF)")
+        st.subheader("📌 Live Layout Preview")
         if HAS_SVGWRITE:
             svg_str = engine.render_svg_preview(full_df, max_items=8)
             st.image(f"data:image/svg+xml;base64,{base64.b64encode(svg_str.encode()).decode()}", use_column_width=True)
