@@ -1,0 +1,183 @@
+/* GrowLeafy Custom Styles */
+
+/* Main container */
+.main {
+    padding: 1rem;
+}
+
+/* Cards */
+.css-card {
+    background-color: #ffffff;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+
+/* Dark mode */
+[data-theme="dark"] .css-card {
+    background-color: #2d2d2d;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Buttons */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Metrics */
+.stMetric {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 15px;
+    border-radius: 10px;
+}
+
+.stMetric label {
+    color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.stMetric [data-testid="stMetricValue"] {
+    color: white !important;
+    font-size: 2rem !important;
+}
+
+/* Sidebar */
+.css-1d391kg {
+    background-color: #f8f9fa;
+}
+
+[data-theme="dark"] .css-1d391kg {
+    background-color: #1a1a1a;
+}
+
+/* Tables */
+.dataframe {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* Headers */
+h1, h2, h3 {
+    font-weight: 600 !important;
+}
+
+/* Search bars */
+[data-testid="stTextInput"] input {
+    border-radius: 20px;
+    border: 2px solid #e0e0e0;
+    padding: 10px 20px;
+}
+
+[data-testid="stTextInput"] input:focus {
+    border-color: #4CAF50;
+    box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+}
+
+/* Tags/Badges */
+.tag {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 15px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    margin: 2px;
+}
+
+.tag-green {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.tag-blue {
+    background-color: #d1ecf1;
+    color: #0c5460;
+}
+
+.tag-yellow {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.tag-red {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+/* Print styles */
+@media print {
+    .stApp {
+        background: white !important;
+    }
+    
+    .stButton, .stTextInput, .stSelectbox {
+        display: none !important;
+    }
+}
+
+/* Responsive design */
+@media screen and (max-width: 768px) {
+    .main {
+        padding: 0.5rem;
+    }
+    
+    .stMetric {
+        margin-bottom: 10px;
+    }
+}
+
+/* Loading animation */
+.stSpinner {
+    color: #4CAF50 !important;
+}
+
+/* Tooltips */
+.tooltip {
+    position: relative;
+    display: inline-block;
+    cursor: help;
+}
+
+.tooltip .tooltiptext {
+    visibility: hidden;
+    background-color: #333;
+    color: #fff;
+    text-align: center;
+    border-radius: 6px;
+    padding: 5px 10px;
+    position: absolute;
+    z-index: 1;
+    bottom: 125%;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.tooltip:hover .tooltiptext {
+    visibility: visible;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
