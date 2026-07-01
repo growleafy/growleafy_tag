@@ -3,20 +3,7 @@ Nursery Operations – Phase 1: Plant Lifecycle, Task Calendar, Workforce, Compl
 """
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime, timedelta
-
-# ---------------------------------------------------------------------------
-# Helper: Safe date parsing
-# ---------------------------------------------------------------------------
-def _parse_date(val):
-    if isinstance(val, (date, datetime)):
-        return val
-    if isinstance(val, str):
-        try:
-            return datetime.strptime(val[:10], "%Y-%m-%d").date()
-        except:
-            pass
-    return None
+from datetime import date, datetime
 
 # ---------------------------------------------------------------------------
 # Main render
@@ -54,7 +41,6 @@ def _render_plant_lifecycle(db):
         batches = db.fetch_all("plant_batches")
         if batches:
             df = pd.DataFrame(batches)
-            # Sort by start_date descending
             if "start_date" in df.columns:
                 df["start_date"] = pd.to_datetime(df["start_date"]).dt.date
                 df = df.sort_values("start_date", ascending=False)
@@ -64,39 +50,41 @@ def _render_plant_lifecycle(db):
 
     elif mode == "Add New Batch":
         with st.form("add_batch"):
-            # Select plant from plants table
             plants = db.fetch_all("plants")
-            plant_options = {p['id']: p.get('name','') for p in plants}
-            plant_id = st.selectbox("Plant", options=list(plant_options.keys()),
-                                    format_func=lambda x: plant_options[x])
-
-            batch_code = st.text_input("Batch Code *")
-            stage = st.selectbox("Initial Stage", [
-                "seed","propagation","germination","seedling","transplanting",
-                "vegetative","flowering","fruiting","ready_for_sale","sold","disposed"
-            ])
-            start_date = st.date_input("Start Date", value=date.today())
-            location = st.text_input("Location (e.g., Greenhouse A)")
-            quantity = st.number_input("Quantity", min_value=1, value=1)
-            notes = st.text_area("Notes")
-            if st.form_submit_button("Save Batch"):
-                if not batch_code:
-                    st.error("Batch code is required.")
-                else:
-                    data = {
-                        "plant_id": plant_id,
-                        "batch_code": batch_code,
-                        "stage": stage,
-                        "start_date": start_date.isoformat(),
-                        "location": location,
-                        "quantity": quantity,
-                        "notes": notes
-                    }
-                    if db.insert_one("plant_batches", data):
-                        st.success("Batch created!")
-                        st.rerun()
+            plant_options = {p['id']: p.get('name', '') for p in plants}
+            if not plant_options:
+                st.warning("No plants in database. Add plants first.")
+                st.form_submit_button("Save Batch", disabled=True)
+            else:
+                plant_id = st.selectbox("Plant", options=list(plant_options.keys()),
+                                        format_func=lambda x: plant_options[x])
+                batch_code = st.text_input("Batch Code *")
+                stage = st.selectbox("Initial Stage", [
+                    "seed", "propagation", "germination", "seedling", "transplanting",
+                    "vegetative", "flowering", "fruiting", "ready_for_sale", "sold", "disposed"
+                ])
+                start_date = st.date_input("Start Date", value=date.today())
+                location = st.text_input("Location (e.g., Greenhouse A)")
+                quantity = st.number_input("Quantity", min_value=1, value=1)
+                notes = st.text_area("Notes")
+                if st.form_submit_button("Save Batch"):
+                    if not batch_code:
+                        st.error("Batch code is required.")
                     else:
-                        st.error("Failed to save batch.")
+                        data = {
+                            "plant_id": plant_id,
+                            "batch_code": batch_code,
+                            "stage": stage,
+                            "start_date": start_date.isoformat(),
+                            "location": location,
+                            "quantity": quantity,
+                            "notes": notes
+                        }
+                        if db.insert_one("plant_batches", data):
+                            st.success("Batch created!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to save batch.")
 
     elif mode == "Update Batch Stage":
         batches = db.fetch_all("plant_batches")
@@ -110,12 +98,12 @@ def _render_plant_lifecycle(db):
         with st.form("update_batch"):
             st.write(f"Current Stage: **{current['stage']}**")
             new_stage = st.selectbox("New Stage", [
-                "seed","propagation","germination","seedling","transplanting",
-                "vegetative","flowering","fruiting","ready_for_sale","sold","disposed"
+                "seed", "propagation", "germination", "seedling", "transplanting",
+                "vegetative", "flowering", "fruiting", "ready_for_sale", "sold", "disposed"
             ])
-            notes = st.text_area("Update Notes")
+            notes = st.text_area("Update Notes", value=current.get("notes", ""))
             if st.form_submit_button("Update Stage"):
-                data = {"stage": new_stage, "notes": (notes if notes else current.get("notes",""))}
+                data = {"stage": new_stage, "notes": notes}
                 if db.update_one("plant_batches", sel_id, data):
                     st.success("Stage updated!")
                     st.rerun()
@@ -128,13 +116,13 @@ def _render_plant_lifecycle(db):
 def _render_task_calendar(db):
     st.subheader("Task Calendar & Scheduling")
 
-    sub = st.radio("View", ["Today's Tasks", "All Scheduled Tasks", "Create Task"],
+    sub = st.radio("View", ["Today's Tasks", "All Scheduled Tasks", "Create Task", "Manage Templates"],
                    key="task_view", horizontal=True)
 
     if sub == "Today's Tasks":
         today = date.today().isoformat()
         all_tasks = db.fetch_all("scheduled_tasks")
-        today_tasks = [t for t in all_tasks if t.get("scheduled_date","") == today] if all_tasks else []
+        today_tasks = [t for t in all_tasks if t.get("scheduled_date", "") == today] if all_tasks else []
         if today_tasks:
             df = pd.DataFrame(today_tasks)
             st.dataframe(df, use_container_width=True)
@@ -153,7 +141,7 @@ def _render_task_calendar(db):
             st.subheader("Update Task Status")
             task_id = st.selectbox("Task ID", df["id"],
                                    format_func=lambda x: f"Task {x} – {df[df['id']==x].iloc[0].get('status','')}")
-            new_status = st.selectbox("New Status", ["pending","in_progress","completed","verified","cancelled"])
+            new_status = st.selectbox("New Status", ["pending", "in_progress", "completed", "verified", "cancelled"])
             if st.button("Update Status"):
                 if db.update_one("scheduled_tasks", task_id, {"status": new_status}):
                     st.success("Status updated!")
@@ -163,10 +151,47 @@ def _render_task_calendar(db):
         else:
             st.info("No tasks in the system.")
 
+    elif sub == "Manage Templates":
+        templates = db.fetch_all("task_templates")
+        if templates:
+            df = pd.DataFrame(templates)
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("No templates yet.")
+        st.markdown("---")
+        with st.form("new_template"):
+            st.subheader("Add New Template")
+            tname = st.text_input("Template Name *")
+            tcat = st.text_input("Category (e.g., Water, Fertilizer)")
+            tinstr = st.text_area("Instructions")
+            test_min = st.number_input("Estimated Minutes", min_value=0, value=10)
+            if st.form_submit_button("Save Template"):
+                if tname:
+                    db.insert_one("task_templates", {
+                        "name": tname,
+                        "category": tcat,
+                        "instructions": tinstr,
+                        "estimated_minutes": test_min
+                    })
+                    st.success("Template created!")
+                    st.rerun()
+                else:
+                    st.error("Template name required.")
+
     elif sub == "Create Task":
         batches = db.fetch_all("plant_batches")
         templates = db.fetch_all("task_templates")
         employees = db.fetch_all("employees")
+
+        if not batches:
+            st.warning("No batches exist. Create a batch first.")
+            return
+        if not templates:
+            st.warning("No task templates. Create one under 'Manage Templates'.")
+            return
+        if not employees:
+            st.warning("No employees. Add them in the Workforce tab.")
+            return
 
         with st.form("create_task"):
             batch_id = st.selectbox("Batch", [b['id'] for b in batches],
@@ -240,16 +265,17 @@ def _render_workforce(db):
                 else:
                     st.error("Failed.")
         with col2:
-            # Find today's attendance record for this employee and set check-out
+            # Find today's open attendance record
             today_iso = date.today().isoformat()
             records = db.fetch_all("attendance")
             if records:
                 today_record = None
                 for r in records:
-                    r_date = r.get("check_in","")[:10]
-                    if r["employee_id"] == emp_id and r_date == today_iso and r.get("check_out") is None:
-                        today_record = r
-                        break
+                    if r.get("check_in"):
+                        r_date = r["check_in"][:10]
+                        if r["employee_id"] == emp_id and r_date == today_iso and r.get("check_out") is None:
+                            today_record = r
+                            break
                 if today_record:
                     if st.button("Check-Out"):
                         now = datetime.now().isoformat()
@@ -273,13 +299,15 @@ def _render_compliance(db):
         st.info("No tasks yet.")
         return
     df = pd.DataFrame(tasks)
-    if "status" not in df.columns:
-        st.info("No status data.")
+    if "status" not in df.columns or "scheduled_date" not in df.columns:
+        st.info("Incomplete task data.")
         return
+
     total = len(df)
-    completed = len(df[df['status'].isin(['completed','verified'])])
+    completed = len(df[df['status'].isin(['completed', 'verified'])])
     pending = len(df[df['status'] == 'pending'])
-    overdue = len(df[(df['status'] == 'pending') & (pd.to_datetime(df['scheduled_date']).dt.date < date.today())])
+    today = date.today()
+    overdue = len(df[(df['status'] == 'pending') & (pd.to_datetime(df['scheduled_date']).dt.date < today)])
     compliance_pct = (completed / total) * 100 if total else 0
 
     col1, col2, col3, col4 = st.columns(4)
@@ -293,5 +321,5 @@ def _render_compliance(db):
 
     if overdue > 0:
         st.warning(f"{overdue} task(s) are past due date and still pending.")
-        overdue_tasks = df[(df['status'] == 'pending') & (pd.to_datetime(df['scheduled_date']).dt.date < date.today())]
-        st.dataframe(overdue_tasks[["id","batch_id","scheduled_date"]], use_container_width=True)
+        overdue_tasks = df[(df['status'] == 'pending') & (pd.to_datetime(df['scheduled_date']).dt.date < today)]
+        st.dataframe(overdue_tasks[["id", "batch_id", "scheduled_date", "assigned_to"]], use_container_width=True)
