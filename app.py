@@ -20,14 +20,13 @@ st.set_page_config(
 from components import (
     dashboard,
     plant_database,
-    fertilizer_database,
-    insecticide_database,
-    pesticide_database,
+    agrochemicals,           # unified agro page
+    pots_planters,
     tag_generator,
     search,
     reports,
     ai_chat,
-    invoice_generator          # <-- Added
+    invoice_generator
 )
 
 # Load environment variables
@@ -36,10 +35,7 @@ load_dotenv()
 # Initialize database connection
 @st.cache_resource(show_spinner=False)
 def init_database():
-    """
-    Create DatabaseManager with Supabase credentials.
-    Tries Streamlit secrets first (cloud), then .env (local).
-    """
+    """Create DatabaseManager with Supabase credentials."""
     url = None
     key = None
 
@@ -67,7 +63,6 @@ class GrowLeafyApp:
         self.load_css()
 
     def initialize_session_state(self):
-        """Initialize and manage session state for fluid navigation"""
         if 'current_page' not in st.session_state:
             st.session_state.current_page = "Dashboard"
         if 'theme' not in st.session_state:
@@ -76,28 +71,24 @@ class GrowLeafyApp:
             st.session_state.ai_enabled = True
 
     def load_css(self):
-        """Inject custom CSS for smooth animations and fluid layout"""
         try:
             with open('assets/styles.css') as f:
                 st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
         except FileNotFoundError:
-            # Swallow warning, not critical for functionality
-            pass
+            pass  # no styling is fine
 
     def render_sidebar(self):
-        """Render a polished, fluid sidebar navigation"""
         with st.sidebar:
             st.markdown("<h1 style='text-align: center; color: #2e7d32;'>🌿 GrowLeafy</h1>", unsafe_allow_html=True)
             st.markdown("<p style='text-align: center; color: gray; font-size: 0.9em; margin-top: -15px;'>Nursery Management</p>", unsafe_allow_html=True)
             st.markdown("---")
 
-            # Navigation menu (added Invoice Generator)
+            # Navigation items – updated to remove old fertilize/insecticide/pesticide
             menu_items = {
                 "Dashboard": "📊 Dashboard",
                 "Plant Database": "🌱 Plant Database",
-                "Fertilizer Database": "🧪 Fertilizer Database",
-                "Insecticide Database": "🐛 Insecticide Database",
-                "Pesticide Database": "🛡️ Pesticide Database",
+                "Agrochemicals": "🧪 Agrochemicals",
+                "Pots & Planters": "🪴 Pots & Planters",
                 "Tag Generator": "🏷️ Tag Generator",
                 "Invoice Generator": "🧾 Invoice Generator",
                 "Advanced Search": "🔍 Advanced Search",
@@ -109,7 +100,6 @@ class GrowLeafyApp:
             for page_key, label in menu_items.items():
                 is_active = st.session_state.current_page == page_key
                 button_type = "primary" if is_active else "secondary"
-
                 if st.button(label, key=page_key, use_container_width=True, type=button_type):
                     if st.session_state.current_page != page_key:
                         st.session_state.current_page = page_key
@@ -117,7 +107,6 @@ class GrowLeafyApp:
 
             st.markdown("---")
 
-            # Settings Expander
             with st.expander("⚙️ Application Settings", expanded=False):
                 new_theme = st.selectbox(
                     "Theme",
@@ -139,19 +128,16 @@ class GrowLeafyApp:
                     status = "enabled" if new_ai_state else "disabled"
                     st.toast(f"AI Assistant {status}.", icon="🤖")
 
-            # Footer
             st.markdown("<div style='text-align: center; margin-top: 50px; color: gray; font-size: 0.8em;'>© 2024 GrowLeafy v1.0.0</div>", unsafe_allow_html=True)
 
     def render_main_content(self):
-        """Render main content with a fade-in container"""
         current_page = st.session_state.current_page
 
         page_components = {
             "Dashboard": dashboard.render,
             "Plant Database": plant_database.render,
-            "Fertilizer Database": fertilizer_database.render,
-            "Insecticide Database": insecticide_database.render,
-            "Pesticide Database": pesticide_database.render,
+            "Agrochemicals": agrochemicals.render,
+            "Pots & Planters": pots_planters.render,
             "Tag Generator": tag_generator.render,
             "Invoice Generator": invoice_generator.render,
             "Advanced Search": search.render,
@@ -165,7 +151,6 @@ class GrowLeafyApp:
             if current_page == "AI Assistant" and not st.session_state.ai_enabled:
                 st.warning("The AI Assistant is currently disabled in your settings.")
             else:
-                # Pass the db instance to every component that expects it
                 page_components[current_page](self.db)
 
         st.markdown('</div>', unsafe_allow_html=True)
