@@ -1,13 +1,13 @@
 """
-Dashboard Component – Statistics, Recent Items, and a floating AI chat panel
+Dashboard Component – Product stats, Nursery Operations overview, and floating AI chat
 """
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import date, datetime
 from utils.database import DatabaseManager
 
 # ---------------------------------------------------------------------------
-# Mini‑chat helpers (plant health logic, same as full AI assistant)
+# Mini chat helpers (same as before)
 # ---------------------------------------------------------------------------
 def _search_inventory(db, keyword: str):
     tables = [
@@ -32,7 +32,6 @@ def _search_inventory(db, keyword: str):
     return results
 
 def _build_chat_reply(prompt: str, db):
-    """Returns a short, inventory‑aware reply for the floating panel."""
     search_results = _search_inventory(db, prompt)
     if not search_results:
         return "No matching products found. Try a different term."
@@ -40,7 +39,7 @@ def _build_chat_reply(prompt: str, db):
     for tbl, rows in search_results.items():
         table_label = tbl.replace("_"," ").title()
         reply += f"**{table_label}**\n"
-        for row in rows[:2]:  # limit to keep panel tidy
+        for row in rows[:2]:
             name = row.get('name', row.get('product_name',''))
             sku = row.get('sku','')
             mrp = row.get('mrp','')
@@ -55,20 +54,17 @@ def _build_chat_reply(prompt: str, db):
     return reply
 
 # ---------------------------------------------------------------------------
-# Main dashboard render
+# Main dashboard
 # ---------------------------------------------------------------------------
 def render(db: DatabaseManager):
-    # Top title remains full width
     st.title("📊 Dashboard")
     st.markdown("---")
 
-    # Use columns to create main area + floating chat panel
-    # Left: main content, Right: chat panel (width 350px)
+    # Use columns for main content + chat panel
     main_col, chat_col = st.columns([3, 1], gap="large")
 
-    # ---------------- LEFT COLUMN (dashboard content) ------------------
     with main_col:
-        # 1. Statistics cards
+        # =================== PRODUCT STATISTICS ===================
         stats = db.get_statistics()
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -81,6 +77,7 @@ def render(db: DatabaseManager):
             st.metric("🧪 Growth Regulators", stats['total_pesticides'])
 
         st.markdown("---")
+
         col5, col6 = st.columns(2)
         with col5:
             st.metric("🏷️ Printed Tags", stats['total_printed_tags'])
@@ -95,7 +92,59 @@ def render(db: DatabaseManager):
 
         st.markdown("---")
 
-        # 2. Quick search (full width)
+        # =================== NURSERY OPERATIONS OVERVIEW ===================
+        st.subheader("🌿 Nursery Operations Snapshot")
+
+        # Fetch operations data (safe fallbacks)
+        try:
+            batches = db.fetch_all("plant_batches")
+            total_batches = len(batches) if batches else 0
+        except:
+            total_batches = 0
+
+        try:
+            employees = db.fetch_all("employees")
+            total_employees = len(employees) if employees else 0
+        except:
+            total_employees = 0
+
+        try:
+            tasks = db.fetch_all("scheduled_tasks")
+            if tasks:
+                df_tasks = pd.DataFrame(tasks)
+                today_str = date.today().isoformat()
+                tasks_today = len(df_tasks[df_tasks['scheduled_date'] == today_str])
+                tasks_overdue = len(df_tasks[(df_tasks['status'] == 'pending') &
+                                             (pd.to_datetime(df_tasks['scheduled_date']).dt.date < date.today())])
+                tasks_completed = len(df_tasks[df_tasks['status'].isin(['completed','verified'])])
+            else:
+                tasks_today = tasks_overdue = tasks_completed = 0
+        except:
+            tasks_today = tasks_overdue = tasks_completed = 0
+
+        try:
+            attendance_records = db.fetch_all("attendance")
+            if attendance_records:
+                today_iso = date.today().isoformat()
+                checked_in_today = sum(1 for r in attendance_records if r.get("check_in","")[:10] == today_iso)
+            else:
+                checked_in_today = 0
+        except:
+            checked_in_today = 0
+
+        col7, col8, col9, col10 = st.columns(4)
+        with col7:
+            st.metric("🪴 Active Batches", total_batches)
+        with col8:
+            st.metric("📅 Tasks Today", tasks_today, delta=f"{tasks_overdue} overdue" if tasks_overdue else None)
+        with col9:
+            st.metric("👷 Employees", total_employees)
+        with col10:
+            st.metric("✅ Completed Tasks", tasks_completed)
+
+        st.markdown("---")
+
+        # =================== QUICK SEARCH ===================
         st.subheader("🔍 Quick Search")
         search_term = st.text_input("Search across all databases", placeholder="Enter name, SKU, brand...")
         if search_term:
@@ -127,7 +176,7 @@ def render(db: DatabaseManager):
 
         st.markdown("---")
 
-        # 3. Recently added items (tabs)
+        # =================== RECENTLY ADDED ITEMS ===================
         st.subheader("🕒 Recently Added Items")
         tab_labels = [
             "Plants", "Agrochemicals", "Pots & Planters", "Seeds",
@@ -156,17 +205,14 @@ def render(db: DatabaseManager):
                 except Exception as e:
                     st.warning(f"Could not load {label.lower()}: {e}")
 
-        # Footer
         st.markdown("---")
         st.markdown(f"© {datetime.now().year} GrowLeafy | Version 1.0.0")
 
-    # ---------------- RIGHT COLUMN (floating chat panel) ----------------
+    # =================== FLOATING AI CHAT (right column) ===================
     with chat_col:
-        # Make the panel visually distinct
         with st.container():
             st.markdown("""
             <style>
-            /* Force the right column to behave like a sticky panel */
             div[data-testid="column"]:nth-child(2) > div {
                 position: sticky;
                 top: 20px;
@@ -177,33 +223,27 @@ def render(db: DatabaseManager):
             st.markdown("### 💬 Quick AI Help")
             st.caption("Describe a plant problem – I'll search your inventory.")
 
-            # Initialize chat history for the panel
             if "panel_chat" not in st.session_state:
                 st.session_state.panel_chat = [
                     {"role": "assistant", "content": "Ask me anything! e.g. *\"black spots on rose\"*"}
                 ]
 
-            # Display previous messages (compact)
             chat_container = st.container()
             with chat_container:
-                for msg in st.session_state.panel_chat[-8:]:  # keep only last 8
+                for msg in st.session_state.panel_chat[-8:]:
                     with st.chat_message(msg["role"]):
                         st.markdown(msg["content"])
 
-            # Input area – a small form that submits without refreshing
             with st.form(key="panel_form", clear_on_submit=True):
                 user_input = st.text_input("Your message", key="panel_input",
                                            placeholder="e.g., organic fungicide")
                 send = st.form_submit_button("Send")
                 if send and user_input:
-                    # Add user message
                     st.session_state.panel_chat.append({"role": "user", "content": user_input})
-                    # Build reply
                     reply = _build_chat_reply(user_input, db)
                     st.session_state.panel_chat.append({"role": "assistant", "content": reply})
                     st.rerun()
 
-            # Clear button
             if len(st.session_state.panel_chat) > 1:
                 if st.button("Clear chat", key="panel_clear"):
                     st.session_state.panel_chat = [
