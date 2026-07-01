@@ -1,5 +1,5 @@
 """
-Dashboard Component – Safe, dynamic, and works with current DatabaseManager.
+Dashboard Component – Updated for unified Agrochemicals table
 """
 import streamlit as st
 import pandas as pd
@@ -10,24 +10,24 @@ def render(db: DatabaseManager):
     st.title("📊 Dashboard")
     st.markdown("---")
 
-    # 1. Statistics cards (safe - already working)
+    # 1. Statistics – keys unchanged, but labels updated
     stats = db.get_statistics()
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("🌱 Total Plants", stats['total_plants'])
     with col2:
-        st.metric("🧪 Total Fertilizers", stats['total_fertilizers'])
+        st.metric("🌾 Fertilizers", stats['total_fertilizers'])       # from agrochemicals
     with col3:
-        st.metric("🐛 Total Insecticides", stats['total_insecticides'])
+        st.metric("🛡️ Plant Protection", stats['total_insecticides'])  # from agrochemicals
     with col4:
-        st.metric("🛡️ Total Pesticides", stats['total_pesticides'])
+        st.metric("🧪 Growth Regulators", stats['total_pesticides'])   # from agrochemicals
 
     st.markdown("---")
 
     col5, col6 = st.columns(2)
     with col5:
-        st.metric("🏷️ Total Printed Tags", stats['total_printed_tags'])
+        st.metric("🏷️ Printed Tags", stats['total_printed_tags'])
     with col6:
         total_items = (
             stats['total_plants']
@@ -39,52 +39,52 @@ def render(db: DatabaseManager):
 
     st.markdown("---")
 
-    # 2. Quick search (manual across tables)
+    # 2. Quick search across current tables
     st.subheader("🔍 Quick Search")
-    search_term = st.text_input(
-        "Search across all databases",
-        placeholder="Enter plant name, product name, brand...",
-        key="dashboard_search"
-    )
+    search_term = st.text_input("Search across all databases", placeholder="Enter name, SKU, brand...")
 
     if search_term:
-        # We'll search all tables that exist
-        tables = ["plants", "fertilizers", "insecticides", "pesticides"]
+        tables = ["plants", "agrochemicals", "pots_planters", "seeds",
+                  "garden_tools", "watering_tools", "garden_decor"]
         results = {}
         total_found = 0
 
         for tbl in tables:
-            rows = db.fetch_all(tbl)  # returns list of dicts
-            # Filter rows where any string field contains the search term
-            filtered = []
-            for row in rows:
-                for val in row.values():
-                    if isinstance(val, str) and search_term.lower() in val.lower():
-                        filtered.append(row)
-                        break
-            results[tbl] = filtered
-            total_found += len(filtered)
+            try:
+                rows = db.fetch_all(tbl)
+                filtered = []
+                for row in rows:
+                    for val in row.values():
+                        if isinstance(val, str) and search_term.lower() in val.lower():
+                            filtered.append(row)
+                            break
+                if filtered:
+                    results[tbl] = filtered
+                    total_found += len(filtered)
+            except Exception:
+                # Table might not exist yet
+                pass
 
         st.info(f"Found {total_found} result(s) for '{search_term}'")
-
         for tbl, rows in results.items():
-            if rows:
-                st.subheader(f"📋 {tbl.capitalize()}")
-                df = pd.DataFrame(rows)
-                # Show first 5 results to keep dashboard clean
-                st.dataframe(df.head(5), use_container_width=True)
+            st.subheader(f"📋 {tbl.replace('_',' ').title()}")
+            df = pd.DataFrame(rows)
+            st.dataframe(df.head(5), use_container_width=True)
 
     st.markdown("---")
 
-    # 3. Recently added items
+    # 3. Recently added items – updated tabs for actual tables
     st.subheader("🕒 Recently Added Items")
-
-    tab_labels = ["Plants", "Fertilizers", "Insecticides", "Pesticides"]
+    tab_labels = ["Plants", "Agrochemicals", "Pots & Planters", "Seeds",
+                  "Garden Tools", "Watering Tools", "Garden Decor"]
     table_map = {
         "Plants": "plants",
-        "Fertilizers": "fertilizers",
-        "Insecticides": "insecticides",
-        "Pesticides": "pesticides",
+        "Agrochemicals": "agrochemicals",
+        "Pots & Planters": "pots_planters",
+        "Seeds": "seeds",
+        "Garden Tools": "garden_tools",
+        "Watering Tools": "watering_tools",
+        "Garden Decor": "garden_decor"
     }
     tabs = st.tabs(tab_labels)
 
@@ -95,7 +95,6 @@ def render(db: DatabaseManager):
                 recent = db.get_recent_items(tbl, limit=5)
                 if recent:
                     df = pd.DataFrame(recent)
-                    # Show all columns except maybe long blobs
                     st.dataframe(df, use_container_width=True)
                 else:
                     st.info(f"No {label.lower()} added yet.")
