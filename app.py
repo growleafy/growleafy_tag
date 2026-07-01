@@ -20,13 +20,17 @@ st.set_page_config(
 from components import (
     dashboard,
     plant_database,
-    agrochemicals,           # unified agro page
+    agrochemicals,
     pots_planters,
+    seeds,
+    garden_tools,
+    watering_tools,
+    garden_decor,
     tag_generator,
+    invoice_generator,
     search,
     reports,
-    ai_chat,
-    invoice_generator
+    ai_chat
 )
 
 # Load environment variables
@@ -75,7 +79,7 @@ class GrowLeafyApp:
             with open('assets/styles.css') as f:
                 st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
         except FileNotFoundError:
-            pass  # no styling is fine
+            pass
 
     def render_sidebar(self):
         with st.sidebar:
@@ -83,12 +87,16 @@ class GrowLeafyApp:
             st.markdown("<p style='text-align: center; color: gray; font-size: 0.9em; margin-top: -15px;'>Nursery Management</p>", unsafe_allow_html=True)
             st.markdown("---")
 
-            # Navigation items – updated to remove old fertilize/insecticide/pesticide
+            # Updated navigation – no more separate fertilizer/insecticide/pesticide
             menu_items = {
                 "Dashboard": "📊 Dashboard",
                 "Plant Database": "🌱 Plant Database",
                 "Agrochemicals": "🧪 Agrochemicals",
                 "Pots & Planters": "🪴 Pots & Planters",
+                "Seeds": "🌱 Seeds",
+                "Garden Tools": "🛠 Garden Tools",
+                "Watering Tools": "💧 Watering Tools",
+                "Garden Decor": "🏡 Garden Decor",
                 "Tag Generator": "🏷️ Tag Generator",
                 "Invoice Generator": "🧾 Invoice Generator",
                 "Advanced Search": "🔍 Advanced Search",
@@ -138,6 +146,10 @@ class GrowLeafyApp:
             "Plant Database": plant_database.render,
             "Agrochemicals": agrochemicals.render,
             "Pots & Planters": pots_planters.render,
+            "Seeds": seeds.render,
+            "Garden Tools": garden_tools.render,
+            "Watering Tools": watering_tools.render,
+            "Garden Decor": garden_decor.render,
             "Tag Generator": tag_generator.render,
             "Invoice Generator": invoice_generator.render,
             "Advanced Search": search.render,
