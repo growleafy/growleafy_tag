@@ -1,15 +1,16 @@
 """
-Dashboard Component – Unified statistics, recent items, and mini AI assistant
+AI Plant Health & Inventory Assistant
+Diagnoses plant issues, searches inventory, recommends treatments.
 """
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from utils.database import DatabaseManager
+import requests
+import json
 
-# ----------------------------------------------------------------------
-# Mini chat helpers (same logic as the full AI assistant)
-# ----------------------------------------------------------------------
-def _search_all_tables(db, keyword: str):
+# ---------------------------------------------------------------------------
+# Helper: Search all product tables for keywords (returns dict by table)
+# ---------------------------------------------------------------------------
+def search_inventory(db, keyword: str):
     tables = [
         "plants", "agrochemicals", "pots_planters", "seeds",
         "garden_tools", "watering_tools", "garden_decor"
@@ -27,168 +28,189 @@ def _search_all_tables(db, keyword: str):
                         break
             if matches:
                 results[tbl] = matches
-        except Exception:
+        except:
             pass
     return results
 
-def _build_fallback_reply(prompt: str, search_results: dict):
-    if not search_results:
-        return "I couldn't find any matching products in your inventory. Please try different keywords."
-    reply_parts = ["Here are relevant items from your nursery:\n"]
+# ---------------------------------------------------------------------------
+# Build a compact inventory summary string for the AI prompt
+# ---------------------------------------------------------------------------
+def build_inventory_context(search_results: dict) -> str:
+    context = []
     for tbl, rows in search_results.items():
-        table_name = tbl.replace("_"," ").title()
-        reply_parts.append(f"**{table_name}**:")
-        for row in rows[:3]:
-            name = row.get('name', row.get('product_name', 'Unknown'))
+        table_label = tbl.replace("_"," ").title()
+        for row in rows:
+            name = row.get('name', row.get('product_name',''))
             sku = row.get('sku','')
             mrp = row.get('mrp','')
-            line = f"- {name}"
-            if sku:
-                line += f" (SKU: {sku})"
-            if mrp:
-                line += f" – ₹{mrp:,.2f}"
-            reply_parts.append(line)
-        reply_parts.append("")
-    reply_parts.append("You can explore these items in the respective database pages.")
-    return "\n".join(reply_parts)
+            cat = row.get('category','')
+            sub = row.get('subcategory','')
+            desc = row.get('description','')[:100] if row.get('description') else ''
+            # Build a line item
+            line = f"[{table_label}] {name}"
+            if sku: line += f" (SKU: {sku})"
+            if cat: line += f" | Category: {cat}/{sub}" if sub else f" | Category: {cat}"
+            if mrp: line += f" | Price: ₹{mrp}"
+            if desc: line += f" | Description: {desc}"
+            context.append(line)
+    return "\n".join(context) if context else "No products found in inventory."
 
-# ----------------------------------------------------------------------
-# Main dashboard render
-# ----------------------------------------------------------------------
-def render(db: DatabaseManager):
-    st.title("📊 Dashboard")
-    st.markdown("---")
-
-    # 1. Statistics
-    stats = db.get_statistics()
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("🌱 Total Plants", stats['total_plants'])
-    with col2:
-        st.metric("🌾 Fertilizers", stats['total_fertilizers'])
-    with col3:
-        st.metric("🛡️ Plant Protection", stats['total_insecticides'])
-    with col4:
-        st.metric("🧪 Growth Regulators", stats['total_pesticides'])
-
-    st.markdown("---")
-    col5, col6 = st.columns(2)
-    with col5:
-        st.metric("🏷️ Printed Tags", stats['total_printed_tags'])
-    with col6:
-        total_items = (
-            stats['total_plants']
-            + stats['total_fertilizers']
-            + stats['total_insecticides']
-            + stats['total_pesticides']
-        )
-        st.metric("📦 Total Inventory Items", total_items)
-
-    st.markdown("---")
-
-    # 2. Quick search
-    st.subheader("🔍 Quick Search")
-    search_term = st.text_input("Search across all databases", placeholder="Enter name, SKU, brand...")
-    if search_term:
-        tables = [
-            "plants", "agrochemicals", "pots_planters", "seeds",
-            "garden_tools", "watering_tools", "garden_decor"
-        ]
-        results = {}
-        total_found = 0
-        for tbl in tables:
-            try:
-                rows = db.fetch_all(tbl)
-                filtered = []
-                for row in rows:
-                    for val in row.values():
-                        if isinstance(val, str) and search_term.lower() in val.lower():
-                            filtered.append(row)
-                            break
-                if filtered:
-                    results[tbl] = filtered
-                    total_found += len(filtered)
-            except Exception:
-                pass
-        st.info(f"Found {total_found} result(s) for '{search_term}'")
-        for tbl, rows in results.items():
-            st.subheader(f"📋 {tbl.replace('_',' ').title()}")
-            df = pd.DataFrame(rows)
-            st.dataframe(df.head(5), use_container_width=True)
-
-    st.markdown("---")
-
-    # 3. Recently added items
-    st.subheader("🕒 Recently Added Items")
-    tab_labels = [
-        "Plants", "Agrochemicals", "Pots & Planters", "Seeds",
-        "Garden Tools", "Watering Tools", "Garden Decor"
-    ]
-    table_map = {
-        "Plants": "plants",
-        "Agrochemicals": "agrochemicals",
-        "Pots & Planters": "pots_planters",
-        "Seeds": "seeds",
-        "Garden Tools": "garden_tools",
-        "Watering Tools": "watering_tools",
-        "Garden Decor": "garden_decor"
+# ---------------------------------------------------------------------------
+# DeepSeek API call (if key present)
+# ---------------------------------------------------------------------------
+def ask_deepseek(prompt: str, api_key: str):
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
-    tabs = st.tabs(tab_labels)
-    for tab, label in zip(tabs, tab_labels):
-        with tab:
-            tbl = table_map[label]
-            try:
-                recent = db.get_recent_items(tbl, limit=5)
-                if recent:
-                    df = pd.DataFrame(recent)
-                    st.dataframe(df, use_container_width=True)
-                else:
-                    st.info(f"No {label.lower()} added yet.")
-            except Exception as e:
-                st.warning(f"Could not load {label.lower()}: {e}")
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "You are a plant health expert. You help nursery staff by diagnosing plant problems, suggesting possible causes with confidence levels, and recommending products ONLY from the provided inventory list. Always include dosage information if known. Never recommend items not in the list. Format your answer clearly with sections: Diagnosis (with confidence %), Product Recommendations, Dosage, Safety Precautions, Preventive Measures."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 800
+    }
+    try:
+        resp = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"]
+        else:
+            return f"DeepSeek API error: {resp.status_code} – {resp.text}"
+    except Exception as e:
+        return f"Failed to reach DeepSeek API: {e}"
 
-    st.markdown("---")
+# ---------------------------------------------------------------------------
+# Fallback expert system (rule‑based with inventory lookup)
+# ---------------------------------------------------------------------------
+def fallback_analysis(user_query: str, inventory_context: str):
+    """Simple keyword matching when AI is not available."""
+    query = user_query.lower()
+    diagnosis = []
+    products = []
+    # Basic rules
+    if "black spot" in query or "black spots" in query:
+        diagnosis.append("🦠 **Black spot disease (Diplocarpon rosae)** – Confidence 90%")
+        products.append("Fungicide containing chlorothalonil or neem oil")
+    if "powder" in query or "white powder" in query:
+        diagnosis.append("🌫️ **Powdery mildew** – Confidence 85%")
+        products.append("Neem oil, potassium bicarbonate, or sulphur-based fungicide")
+    if "curl" in query or "curling" in query:
+        diagnosis.append("🍃 **Leaf curl (viral/fungal/insect damage)** – Confidence 70%")
+        products.append("Copper oxychloride, neem oil, or appropriate insecticide")
+    if "yellow" in query and "leaf" in query:
+        diagnosis.append("🟡 **Nutrient deficiency (iron/magnesium/nitrogen)** – Confidence 65%")
+        products.append("Balanced NPK fertilizer, micronutrient spray")
+    if "aphid" in query or "aphids" in query:
+        diagnosis.append("🐞 **Aphids** – Confidence 95%")
+        products.append("Neem oil, insecticidal soap, or pyrethrin-based insecticide")
+    if "mealybug" in query or "mealybugs" in query:
+        diagnosis.append("🐛 **Mealybugs** – Confidence 95%")
+        products.append("Neem oil, alcohol spray, or systemic insecticide")
+    if not diagnosis:
+        diagnosis.append("❓ **Unclear diagnosis** – I couldn't determine the exact issue. Please provide more details or consult a specialist.")
+    # Cross‑reference with inventory
+    reply = "**🔍 Plant Health Assessment**\n\n"
+    reply += "\n".join(diagnosis) + "\n\n"
+    if products:
+        reply += "**🛒 Recommended Products (check inventory):**\n"
+        reply += "\n".join(f"- {p}" for p in products) + "\n\n"
+    reply += "**📦 Inventory Relevance:**\n"
+    if inventory_context != "No products found in inventory.":
+        reply += "The following items in your inventory may be useful:\n\n" + inventory_context + "\n"
+    else:
+        reply += "No matching products found in your inventory.\n"
+    reply += "\n⚠️ *Please verify dosage on product labels. This is computer‑generated advice.*"
+    return reply
 
-    # 4. Mini AI Assistant (embedded)
-    st.subheader("💬 Mini Assistant")
-    st.caption("Ask a quick question about your inventory – I'll search your products.")
+# ---------------------------------------------------------------------------
+# Main Streamlit UI
+# ---------------------------------------------------------------------------
+def render(db):
+    st.title("🌿 AI Plant Health & Inventory Assistant")
+    st.caption("Describe your plant problem – I’ll diagnose and recommend products from your inventory.")
 
-    # Initialize mini chat history
-    if "dash_chat" not in st.session_state:
-        st.session_state.dash_chat = [
-            {"role": "assistant", "content": "Hi! Ask me something like 'organic fungicide' or 'rose care'."}
+    # API key check
+    deepseek_key = None
+    try:
+        deepseek_key = st.secrets["DEEPSEEK_API_KEY"]
+    except:
+        pass
+
+    # Chat history
+    if "plant_chat" not in st.session_state:
+        st.session_state.plant_chat = [
+            {"role": "assistant", "content": "Hello! I can help diagnose plant issues and suggest products from your inventory. Try: *\"Rose leaves have black spots\"* or *\"What organic fungicide do you have?\"*"}
         ]
 
-    # Display last N messages (keep it compact)
-    with st.container(height=200):
-        for msg in st.session_state.dash_chat[-6:]:  # show at most 6 messages
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+    # Display chat
+    for msg in st.session_state.plant_chat:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    # Input area
-    with st.form(key="dash_chat_form", clear_on_submit=True):
-        user_input = st.text_input("Your message", key="dash_input", placeholder="e.g., best fertilizer for roses")
-        send = st.form_submit_button("Send")
-        if send and user_input:
-            # Add user message
-            st.session_state.dash_chat.append({"role": "user", "content": user_input})
+    # Input
+    if prompt := st.chat_input("Describe the problem..."):
+        st.session_state.plant_chat.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-            # Search and build reply
-            results = _search_all_tables(db, user_input)
-            reply = _build_fallback_reply(user_input, results)
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            with st.spinner("Analyzing symptoms and searching inventory..."):
+                # 1. Search inventory for keywords
+                search_results = search_inventory(db, prompt)
+                # Also search for broader terms (extract likely product types)
+                extra_terms = []
+                if "fungus" in prompt.lower() or "black spot" in prompt.lower():
+                    extra_terms.append("fungicide")
+                if "insect" in prompt.lower() or "aphid" in prompt.lower() or "mealy" in prompt.lower():
+                    extra_terms.append("insecticide")
+                if "deficiency" in prompt.lower() or "yellow" in prompt.lower():
+                    extra_terms.append("fertilizer")
+                    extra_terms.append("nutrient")
+                for term in extra_terms:
+                    more = search_inventory(db, term)
+                    for k,v in more.items():
+                        if k in search_results:
+                            search_results[k].extend(v)
+                        else:
+                            search_results[k] = v
+                # Remove duplicates
+                for k in search_results:
+                    seen = set()
+                    unique = []
+                    for row in search_results[k]:
+                        uid = row.get('id', str(row))
+                        if uid not in seen:
+                            seen.add(uid)
+                            unique.append(row)
+                    search_results[k] = unique
 
-            # Add assistant reply
-            st.session_state.dash_chat.append({"role": "assistant", "content": reply})
-            st.rerun()
+                inv_context = build_inventory_context(search_results)
 
-    # Clear button
-    if len(st.session_state.dash_chat) > 1:
-        if st.button("Clear mini chat"):
-            st.session_state.dash_chat = [
-                {"role": "assistant", "content": "Hi! Ask me something like 'organic fungicide' or 'rose care'."}
+                # 2. Build prompt for AI (or fallback)
+                if deepseek_key:
+                    # Prepare expert prompt
+                    full_prompt = f"""User question: "{prompt}"
+Inventory available (only recommend from this list):
+{inv_context}
+
+Please diagnose the likely plant problem, provide confidence levels, recommend specific products from the inventory (with dosage if applicable), safety precautions, and preventive measures. Keep it concise."""
+                    response = ask_deepseek(full_prompt, deepseek_key)
+                else:
+                    response = fallback_analysis(prompt, inv_context)
+
+                message_placeholder.markdown(response)
+                st.session_state.plant_chat.append({"role": "assistant", "content": response})
+
+    # Clear chat button
+    if len(st.session_state.plant_chat) > 1:
+        if st.button("🗑️ Clear Chat"):
+            st.session_state.plant_chat = [
+                {"role": "assistant", "content": "Chat cleared. How can I help?"}
             ]
             st.rerun()
 
-    # Footer
     st.markdown("---")
-    st.markdown(f"© {datetime.now().year} GrowLeafy | Version 1.0.0")
+    st.caption("💡 **Tip:** For best results, add your DeepSeek API key in secrets (`DEEPSEEK_API_KEY`).")
