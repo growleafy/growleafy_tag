@@ -1,6 +1,6 @@
 """
 utils/database.py – Supabase Database Manager for Nursery Management System
-Covers: Statistics, CRUD, Image upload, Invoice persistence, and safe error handling.
+Covers: Statistics, CRUD, Bulk Insert, Image Upload, Invoice Persistence
 """
 import uuid
 import json
@@ -9,11 +9,6 @@ from supabase import create_client, Client
 
 class DatabaseManager:
     def __init__(self, url: str, key: str):
-        """
-        Initialize Supabase client.
-        :param url: Supabase project URL
-        :param key: Supabase anon/public API key
-        """
         self.url = url
         self.key = key
         try:
@@ -22,29 +17,37 @@ class DatabaseManager:
             raise ConnectionError(f"Failed to connect to Supabase: {e}")
 
     # -------------------------------------------------------------------------
-    # SAFE COUNT / STATISTICS
+    # STATISTICS – now using agrochemicals for fertilizers & protection
     # -------------------------------------------------------------------------
     def get_statistics(self):
         stats = {
             'total_plants': 0,
-            'total_fertilizers': 0,
-            'total_insecticides': 0,
-            'total_pesticides': 0,
+            'total_fertilizers': 0,        # from agrochemicals where type='Fertilizer'
+            'total_insecticides': 0,       # from agrochemicals where type='Plant Protection'
+            'total_pesticides': 0,         # from agrochemicals where type='Growth Regulator'
             'total_printed_tags': 0
         }
-        table_map = {
-            'total_plants': 'plants',
-            'total_fertilizers': 'fertilizers',
-            'total_insecticides': 'insecticides',
-            'total_pesticides': 'pesticides',
-            # 'total_printed_tags': 'printed_tags'
+
+        # Plants table (unchanged)
+        try:
+            res = self.client.table("plants").select("*", count='exact').execute()
+            stats['total_plants'] = res.count if res.count is not None else 0
+        except Exception as e:
+            print(f"[Statistics] Error counting plants: {e}")
+
+        # Agrochemicals split by type
+        type_map = {
+            'total_fertilizers': 'Fertilizer',
+            'total_insecticides': 'Plant Protection',
+            'total_pesticides': 'Growth Regulator'
         }
-        for key, table_name in table_map.items():
+        for key, agro_type in type_map.items():
             try:
-                res = self.client.table(table_name).select("*", count='exact').execute()
+                res = self.client.table("agrochemicals").select("*", count='exact').eq("type", agro_type).execute()
                 stats[key] = res.count if res.count is not None else 0
             except Exception as e:
-                print(f"[Statistics] Error counting {table_name}: {e}")
+                print(f"[Statistics] Error counting agrochemicals type={agro_type}: {e}")
+
         return stats
 
     # -------------------------------------------------------------------------
@@ -104,6 +107,15 @@ class DatabaseManager:
             print(f"[Insert] Error in {table_name}: {e}")
             return None
 
+    def insert_many(self, table_name: str, records: list) -> bool:
+        """Insert multiple rows at once. Returns True if successful."""
+        try:
+            self.client.table(table_name).insert(records).execute()
+            return True
+        except Exception as e:
+            print(f"[BulkInsert] Error in {table_name}: {e}")
+            return False
+
     def update_one(self, table_name: str, record_id, data: dict, id_column: str = "id"):
         try:
             res = (
@@ -119,22 +131,35 @@ class DatabaseManager:
 
     def delete_one(self, table_name: str, record_id, id_column: str = "id"):
         try:
-            res = (
-                self.client.table(table_name)
-                .delete()
-                .eq(id_column, record_id)
-                .execute()
-            )
+            self.client.table(table_name).delete().eq(id_column, record_id).execute()
             return True
         except Exception as e:
             print(f"[Delete] Error in {table_name}: {e}")
             return False
 
     # -------------------------------------------------------------------------
-    # INVOICE METHODS (for invoice generator)
+    # DYNAMIC SUBCATEGORIES
+    # -------------------------------------------------------------------------
+    def get_distinct_subcategories(self, table_name: str) -> list:
+        """Return sorted unique subcategory values from a table."""
+        try:
+            res = self.client.table(table_name).select("subcategory").execute()
+            if not res.data:
+                return []
+            subs = set()
+            for row in res.data:
+                val = row.get("subcategory")
+                if val and isinstance(val, str) and val.strip():
+                    subs.add(val.strip())
+            return sorted(subs)
+        except Exception as e:
+            print(f"Error fetching subcategories from {table_name}: {e}")
+            return []
+
+    # -------------------------------------------------------------------------
+    # INVOICE METHODS
     # -------------------------------------------------------------------------
     def get_next_invoice_number(self, prefix: str = "BV/MLP") -> str:
-        """Auto-increment invoice number using the 'invoice_counter' table."""
         try:
             res = self.client.table("invoice_counter").select("*").eq("prefix", prefix).execute()
             if res.data and len(res.data) > 0:
@@ -152,7 +177,6 @@ class DatabaseManager:
             return f"{prefix}/{datetime.now().year}/{random.randint(1000,9999)}"
 
     def save_invoice(self, invoice_data: dict) -> bool:
-        """Save invoice JSON to 'invoices' table."""
         try:
             self.client.table("invoices").insert({
                 "invoice_number": invoice_data.get("invoice_number"),
@@ -165,7 +189,6 @@ class DatabaseManager:
             return False
 
     def get_invoices(self) -> list:
-        """Retrieve all saved invoices, newest first."""
         try:
             res = self.client.table("invoices").select("*").order("created_at", desc=True).execute()
             return res.data if res.data else []
@@ -174,7 +197,6 @@ class DatabaseManager:
             return []
 
     def delete_invoice(self, invoice_id) -> bool:
-        """Delete an invoice by its id."""
         try:
             self.client.table("invoices").delete().eq("id", invoice_id).execute()
             return True
@@ -182,7 +204,10 @@ class DatabaseManager:
             print(f"Error deleting invoice: {e}")
             return False
 
-# Optional singleton helper
+
+# ---------------------------------------------------------------------
+# SINGLETON HELPER (optional)
+# ---------------------------------------------------------------------
 _db_instance = None
 
 def get_db():
