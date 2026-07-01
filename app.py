@@ -26,6 +26,7 @@ from components import (
     garden_tools,
     watering_tools,
     garden_decor,
+    nursery_operations,       # NEW: Phase 1 Operations
     tag_generator,
     invoice_generator,
     search,
@@ -79,7 +80,7 @@ class GrowLeafyApp:
             with open('assets/styles.css') as f:
                 st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
         except FileNotFoundError:
-            pass
+            pass  # no styling is fine
 
     def render_sidebar(self):
         with st.sidebar:
@@ -87,7 +88,7 @@ class GrowLeafyApp:
             st.markdown("<p style='text-align: center; color: gray; font-size: 0.9em; margin-top: -15px;'>Nursery Management</p>", unsafe_allow_html=True)
             st.markdown("---")
 
-            # Updated navigation – no more separate fertilizer/insecticide/pesticide
+            # Updated navigation – includes all modules
             menu_items = {
                 "Dashboard": "📊 Dashboard",
                 "Plant Database": "🌱 Plant Database",
@@ -97,6 +98,7 @@ class GrowLeafyApp:
                 "Garden Tools": "🛠 Garden Tools",
                 "Watering Tools": "💧 Watering Tools",
                 "Garden Decor": "🏡 Garden Decor",
+                "Nursery Operations": "🌿 Nursery Ops",   # NEW
                 "Tag Generator": "🏷️ Tag Generator",
                 "Invoice Generator": "🧾 Invoice Generator",
                 "Advanced Search": "🔍 Advanced Search",
@@ -150,6 +152,7 @@ class GrowLeafyApp:
             "Garden Tools": garden_tools.render,
             "Watering Tools": watering_tools.render,
             "Garden Decor": garden_decor.render,
+            "Nursery Operations": nursery_operations.render,   # NEW
             "Tag Generator": tag_generator.render,
             "Invoice Generator": invoice_generator.render,
             "Advanced Search": search.render,
