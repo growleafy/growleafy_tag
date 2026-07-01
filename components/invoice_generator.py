@@ -1,6 +1,6 @@
 """
 components/invoice_generator.py
-Enterprise Invoice Generator – Tax, Logo, Save, QR, Multi‑format Export
+Invoice Generator – Tax, Logo, Save, QR, Multi‑format Export
 """
 import streamlit as st
 import pandas as pd
@@ -233,7 +233,7 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
 # Streamlit UI
 # -------------------------------------------------------------------
 def render(db=None):
-    st.title("🧾 Enterprise Invoice Generator")
+    st.title("🧾 Invoice Generator")
     st.caption("Tax, Logo, Auto‑numbering, Save & WhatsApp‑ready output")
 
     # ------------------ Session state initialization ------------------
