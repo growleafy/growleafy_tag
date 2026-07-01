@@ -1,22 +1,267 @@
 """
-Nursery Operations – Phase 1: Plant Lifecycle, Task Calendar, Workforce, Compliance
+Nursery Operations – Phase 1 + Reports & Printouts (All Indian Languages)
 """
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+import io, os, glob
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.platypus import Table, TableStyle
+from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+# ---------------------------------------------------------------------------
+# Indian languages mapping (same as in reports.py)
+# ---------------------------------------------------------------------------
+INDIAN_LANGUAGES = {
+    "English": "en",
+    "हिन्दी (Hindi)": "hi",
+    "বাংলা (Bengali)": "bn",
+    "తెలుగు (Telugu)": "te",
+    "मराठी (Marathi)": "mr",
+    "தமிழ் (Tamil)": "ta",
+    "اردو (Urdu)": "ur",
+    "ગુજરાતી (Gujarati)": "gu",
+    "ಕನ್ನಡ (Kannada)": "kn",
+    "ଓଡ଼ିଆ (Odia)": "or",
+    "മലയാളം (Malayalam)": "ml",
+    "ਪੰਜਾਬੀ (Punjabi)": "pa",
+    "অসমীয়া (Assamese)": "as",
+    "मैथिली (Maithili)": "mai"
+}
+
+# ---------------------------------------------------------------------------
+# Font helper (same logic as reports.py)
+# ---------------------------------------------------------------------------
+def _find_noto_font():
+    """Locate NotoSans-Regular.ttf on the system."""
+    search_patterns = [
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans*.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSans*.ttf",
+        "/usr/share/fonts/noto/*.ttf"
+    ]
+    for pattern in search_patterns:
+        for match in glob.glob(pattern):
+            if "Regular" in match or "regular" in match.lower():
+                return match
+    return None
+
+# ---------------------------------------------------------------------------
+# Translation dictionary for static report headings
+# ---------------------------------------------------------------------------
+def get_translations(lang_code):
+    """Return dict of translated strings for report headings."""
+    # Default English
+    t = {
+        "daily_handout": "Daily Task Handout",
+        "date": "Date",
+        "task_id": "Task ID",
+        "batch": "Batch",
+        "task": "Task",
+        "employee": "Employee",
+        "status": "Status",
+        "monthly_attendance": "Monthly Attendance Report",
+        "employee_name": "Employee Name",
+        "month": "Month",
+        "day": "Day",
+        "check_in": "Check-In",
+        "check_out": "Check-Out",
+        "task_calendar": "Task Calendar",
+        "scheduled_date": "Scheduled Date",
+    }
+    if lang_code == "hi":
+        t.update({
+            "daily_handout": "दैनिक कार्य सूची",
+            "date": "दिनांक",
+            "task_id": "कार्य ID",
+            "batch": "बैच",
+            "task": "कार्य",
+            "employee": "कर्मचारी",
+            "status": "स्थिति",
+            "monthly_attendance": "मासिक उपस्थिति रिपोर्ट",
+            "employee_name": "कर्मचारी का नाम",
+            "month": "महीना",
+            "day": "दिन",
+            "check_in": "आगमन",
+            "check_out": "प्रस्थान",
+            "task_calendar": "कार्य कैलेंडर",
+            "scheduled_date": "निर्धारित तिथि",
+        })
+    # TODO: add more languages as needed (bn, te, mr, ta, etc.)
+    return t
+
+# ---------------------------------------------------------------------------
+# PDF generation functions
+# ---------------------------------------------------------------------------
+def _build_pdf(title: str, data_lines: list, lang_code: str) -> io.BytesIO:
+    """Create a simple PDF with title and lines."""
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=A4)
+    w, h = A4
+
+    # Choose font
+    if lang_code != "en":
+        font_path = _find_noto_font()
+        if font_path:
+            try:
+                pdfmetrics.registerFont(TTFont("NotoSans", font_path))
+                font_name = "NotoSans"
+            except:
+                font_name = "Helvetica"
+        else:
+            font_name = "Helvetica"
+    else:
+        font_name = "Helvetica"
+
+    p.setFont(font_name, 12)
+    p.drawCentredString(w/2, h - 30*mm, title)
+
+    p.setFont(font_name, 9)
+    y = h - 40*mm
+    for line in data_lines:
+        if isinstance(line, str):
+            p.drawString(20*mm, y, line)
+            y -= 5*mm
+            if y < 20*mm:
+                p.showPage()
+                y = h - 30*mm
+                p.setFont(font_name, 9)
+
+    p.save()
+    buffer.seek(0)
+    return buffer
+
+def _generate_daily_handout(db, selected_date, lang_code):
+    """Fetch tasks for a given date and format as PDF."""
+    trans = get_translations(lang_code)
+    date_str = selected_date.isoformat()
+    tasks = db.fetch_all("scheduled_tasks")
+    day_tasks = [t for t in tasks if t.get("scheduled_date","") == date_str] if tasks else []
+
+    title = f"{trans['daily_handout']} - {selected_date.strftime('%d/%m/%Y')}"
+    lines = [f"{trans['date']}: {selected_date.strftime('%d/%m/%Y')}", "", ""]
+
+    if not day_tasks:
+        lines.append("No tasks scheduled for this day.")
+    else:
+        # Fetch batch names and employee names for readability
+        batches = {b['id']: b['batch_code'] for b in db.fetch_all("plant_batches")}
+        employees = {e['id']: e['name'] for e in db.fetch_all("employees")}
+        templates = {t['id']: t['name'] for t in db.fetch_all("task_templates")}
+
+        lines.append(f"{'ID':<5} {'Batch':<15} {'Task':<20} {'Assigned To':<15} {'Status':<10}")
+        for t in day_tasks:
+            batch_name = batches.get(t.get("batch_id"), "?")
+            task_name = templates.get(t.get("template_id"), "?")
+            emp_name = employees.get(t.get("assigned_to"), "?")
+            status = t.get("status","?")
+            lines.append(f"{t['id']:<5} {batch_name[:15]:<15} {task_name[:20]:<20} {emp_name[:15]:<15} {status:<10}")
+
+    return _build_pdf(title, lines, lang_code)
+
+def _generate_monthly_attendance(db, emp_id, month, lang_code):
+    """Fetch attendance records for one employee in a month."""
+    trans = get_translations(lang_code)
+    emp = next((e for e in db.fetch_all("employees") if e['id']==emp_id), None)
+    emp_name = emp['name'] if emp else str(emp_id)
+
+    # Get all attendance records for the month
+    start_date = month.replace(day=1)
+    if month.month == 12:
+        end_date = month.replace(year=month.year+1, month=1, day=1) - timedelta(days=1)
+    else:
+        end_date = month.replace(month=month.month+1, day=1) - timedelta(days=1)
+
+    records = db.fetch_all("attendance")
+    month_records = []
+    for r in records:
+        if r.get("employee_id") == emp_id and r.get("check_in"):
+            r_date = datetime.fromisoformat(r["check_in"]).date()
+            if start_date <= r_date <= end_date:
+                month_records.append(r)
+
+    # Sort by date
+    month_records.sort(key=lambda x: x["check_in"])
+
+    title = f"{trans['monthly_attendance']} - {emp_name} ({month.strftime('%B %Y')})"
+    lines = [
+        f"{trans['employee_name']}: {emp_name}",
+        f"{trans['month']}: {month.strftime('%B %Y')}",
+        "", ""
+    ]
+    if not month_records:
+        lines.append("No attendance records found for this month.")
+    else:
+        lines.append(f"{'Date':<12} {trans['day']:<10} {trans['check_in']:<20} {trans['check_out']:<20}")
+        for r in month_records:
+            dt = datetime.fromisoformat(r["check_in"])
+            day_name = dt.strftime("%A")
+            check_in = dt.strftime("%H:%M:%S")
+            check_out = datetime.fromisoformat(r["check_out"]).strftime("%H:%M:%S") if r.get("check_out") else "N/A"
+            lines.append(f"{dt.strftime('%d/%m/%Y'):<12} {day_name[:10]:<10} {check_in:<20} {check_out:<20}")
+
+    return _build_pdf(title, lines, lang_code)
+
+def _generate_task_calendar(db, month, lang_code):
+    """Generate a list of all tasks for a given month."""
+    trans = get_translations(lang_code)
+    tasks = db.fetch_all("scheduled_tasks")
+    if not tasks:
+        return _build_pdf(trans['task_calendar'], ["No tasks."], lang_code)
+
+    start_date = month.replace(day=1)
+    if month.month == 12:
+        end_date = month.replace(year=month.year+1, month=1, day=1) - timedelta(days=1)
+    else:
+        end_date = month.replace(month=month.month+1, day=1) - timedelta(days=1)
+
+    month_tasks = []
+    for t in tasks:
+        sched = t.get("scheduled_date","")
+        if sched:
+            d = datetime.strptime(sched, "%Y-%m-%d").date()
+            if start_date <= d <= end_date:
+                month_tasks.append(t)
+
+    month_tasks.sort(key=lambda x: x["scheduled_date"])
+
+    batches = {b['id']: b['batch_code'] for b in db.fetch_all("plant_batches")}
+    employees = {e['id']: e['name'] for e in db.fetch_all("employees")}
+    templates = {t['id']: t['name'] for t in db.fetch_all("task_templates")}
+
+    title = f"{trans['task_calendar']} - {month.strftime('%B %Y')}"
+    lines = [f"{trans['month']}: {month.strftime('%B %Y')}", "", ""]
+    if not month_tasks:
+        lines.append("No tasks scheduled for this month.")
+    else:
+        lines.append(f"{trans['scheduled_date']:<14} {trans['batch']:<15} {trans['task']:<20} {trans['employee']:<15} {trans['status']:<10}")
+        for t in month_tasks:
+            d = t["scheduled_date"]
+            batch = batches.get(t.get("batch_id"), "?")[:15]
+            task = templates.get(t.get("template_id"), "?")[:20]
+            emp = employees.get(t.get("assigned_to"), "?")[:15]
+            status = t.get("status","?")
+            lines.append(f"{d:<14} {batch:<15} {task:<20} {emp:<15} {status:<10}")
+
+    return _build_pdf(title, lines, lang_code)
 
 # ---------------------------------------------------------------------------
 # Main render
 # ---------------------------------------------------------------------------
 def render(db):
     st.title("🌿 Nursery Operations")
-    st.caption("Plant lifecycle, task scheduling, workforce, and compliance")
+    st.caption("Plant lifecycle, task scheduling, workforce, compliance, and reports")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🪴 Plant Lifecycle",
         "📅 Task Calendar",
         "👷 Workforce",
-        "📊 Compliance"
+        "📊 Compliance",
+        "📄 Reports & Printouts"
     ])
 
     with tab1:
@@ -27,13 +272,14 @@ def render(db):
         _render_workforce(db)
     with tab4:
         _render_compliance(db)
+    with tab5:
+        _render_reports(db)
 
 # ---------------------------------------------------------------------------
-# 1. PLANT LIFECYCLE
+# 1. PLANT LIFECYCLE (unchanged)
 # ---------------------------------------------------------------------------
 def _render_plant_lifecycle(db):
     st.subheader("Plant Batches & Growth Stages")
-
     mode = st.radio("Action", ["View Batches", "Add New Batch", "Update Batch Stage"],
                     key="lifecycle_mode", horizontal=True)
 
@@ -111,7 +357,7 @@ def _render_plant_lifecycle(db):
                     st.error("Update failed.")
 
 # ---------------------------------------------------------------------------
-# 2. TASK CALENDAR
+# 2. TASK CALENDAR (unchanged)
 # ---------------------------------------------------------------------------
 def _render_task_calendar(db):
     st.subheader("Task Calendar & Scheduling")
@@ -137,7 +383,6 @@ def _render_task_calendar(db):
                 df["scheduled_date"] = pd.to_datetime(df["scheduled_date"]).dt.date
             st.dataframe(df, use_container_width=True)
 
-            # Quick status update
             st.subheader("Update Task Status")
             task_id = st.selectbox("Task ID", df["id"],
                                    format_func=lambda x: f"Task {x} – {df[df['id']==x].iloc[0].get('status','')}")
@@ -216,11 +461,10 @@ def _render_task_calendar(db):
                     st.error("Failed.")
 
 # ---------------------------------------------------------------------------
-# 3. WORKFORCE
+# 3. WORKFORCE (unchanged)
 # ---------------------------------------------------------------------------
 def _render_workforce(db):
     st.subheader("Employees & Attendance")
-
     mode = st.radio("Action", ["Employee List", "Add Employee", "Attendance Check-In"],
                     key="wf_mode", horizontal=True)
 
@@ -265,7 +509,6 @@ def _render_workforce(db):
                 else:
                     st.error("Failed.")
         with col2:
-            # Find today's open attendance record
             today_iso = date.today().isoformat()
             records = db.fetch_all("attendance")
             if records:
@@ -290,7 +533,7 @@ def _render_workforce(db):
                 st.info("No attendance records.")
 
 # ---------------------------------------------------------------------------
-# 4. COMPLIANCE DASHBOARD
+# 4. COMPLIANCE (unchanged)
 # ---------------------------------------------------------------------------
 def _render_compliance(db):
     st.subheader("Task Compliance Overview")
@@ -323,3 +566,52 @@ def _render_compliance(db):
         st.warning(f"{overdue} task(s) are past due date and still pending.")
         overdue_tasks = df[(df['status'] == 'pending') & (pd.to_datetime(df['scheduled_date']).dt.date < today)]
         st.dataframe(overdue_tasks[["id", "batch_id", "scheduled_date", "assigned_to"]], use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# 5. REPORTS & PRINTOUTS (NEW)
+# ---------------------------------------------------------------------------
+def _render_reports(db):
+    st.subheader("📄 Reports & Printouts")
+    st.markdown("Generate printable reports in your preferred language.")
+
+    col_lang, col_report = st.columns(2)
+    with col_lang:
+        selected_lang_label = st.selectbox("Report Language", list(INDIAN_LANGUAGES.keys()))
+        lang_code = INDIAN_LANGUAGES[selected_lang_label]
+    with col_report:
+        report_type = st.selectbox("Report Type", [
+            "Daily Task Handout",
+            "Monthly Attendance Report",
+            "Monthly Task Calendar"
+        ])
+
+    # Parameters depending on report type
+    if report_type == "Daily Task Handout":
+        selected_date = st.date_input("Select Date", value=date.today())
+        if st.button("Generate Handout PDF"):
+            pdf = _generate_daily_handout(db, selected_date, lang_code)
+            st.success("Handout ready!")
+            st.download_button("📥 Download PDF", pdf, f"daily_tasks_{selected_date}.pdf", "application/pdf")
+
+    elif report_type == "Monthly Attendance Report":
+        col_emp, col_month = st.columns(2)
+        with col_emp:
+            employees = db.fetch_all("employees")
+            if not employees:
+                st.warning("No employees found.")
+                return
+            emp_id = st.selectbox("Employee", [e['id'] for e in employees],
+                                  format_func=lambda x: next((e['name'] for e in employees if e['id']==x), ""))
+        with col_month:
+            month = st.date_input("Month", value=date.today().replace(day=1))
+        if st.button("Generate Attendance Report"):
+            pdf = _generate_monthly_attendance(db, emp_id, month, lang_code)
+            st.success("Attendance report ready!")
+            st.download_button("📥 Download PDF", pdf, f"attendance_{emp_id}_{month.strftime('%Y%m')}.pdf", "application/pdf")
+
+    elif report_type == "Monthly Task Calendar":
+        month = st.date_input("Select Month", value=date.today().replace(day=1))
+        if st.button("Generate Task Calendar PDF"):
+            pdf = _generate_task_calendar(db, month, lang_code)
+            st.success("Task calendar ready!")
+            st.download_button("📥 Download PDF", pdf, f"task_calendar_{month.strftime('%Y%m')}.pdf", "application/pdf")
