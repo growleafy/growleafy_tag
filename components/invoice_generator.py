@@ -241,10 +241,10 @@ def render(db=None):
         st.session_state.inv_sender = {
             'company': 'Biswas Ventures',
             'address': 'Madhabpur - Panpur Road\nPanpur, West Bengal, 743126, India',
-            'phone': '9903026500',
+            'phone': '9804939270',
             'email': 'biswas4trade@gmail.com',
             'bank_details': 'A/C name : Subhasis Biswas\nAccount No. : 32781178011\nIFSC : SBIN0006042\nBRANCH : RATHTALA\nSTATE BANK OF INDIA',
-            'upi_id': '9903026500@upi',
+            'upi_id': 'subhasisboi@axl',
             'upi_name': 'Subhasis Biswas'
         }
     if 'inv_client' not in st.session_state:
