@@ -1,20 +1,22 @@
 """
 Reports & Analytics Component – Inventory health, financials, data export,
-and Advanced Plant Health Diagnosis with PDF report generation.
+and Advanced Plant Diagnosis with Indian language support.
 """
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import io, os
+import io, os, glob
 from datetime import datetime
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 import requests, json, base64
 from PIL import Image
 
 # ---------------------------------------------------------------------------
-# Helpers for inventory fetching (used across tabs)
+# Table mapping
 # ---------------------------------------------------------------------------
 ALL_PRODUCT_TABLES = {
     "Plants": "plants",
@@ -26,33 +28,50 @@ ALL_PRODUCT_TABLES = {
     "Garden Decor": "garden_decor"
 }
 
+# Indian languages supported (as per user preference)
+INDIAN_LANGUAGES = {
+    "English": "en",
+    "हिन्दी (Hindi)": "hi",
+    "বাংলা (Bengali)": "bn",
+    "తెలుగు (Telugu)": "te",
+    "मराठी (Marathi)": "mr",
+    "தமிழ் (Tamil)": "ta",
+    "اردو (Urdu)": "ur",
+    "ગુજરાતી (Gujarati)": "gu",
+    "ಕನ್ನಡ (Kannada)": "kn",
+    "ଓଡ଼ିଆ (Odia)": "or",
+    "മലയാളം (Malayalam)": "ml",
+    "ਪੰਜਾਬੀ (Punjabi)": "pa",
+    "অসমীয়া (Assamese)": "as",
+    "मैथिली (Maithili)": "mai"
+}
+
+# ---------------------------------------------------------------------------
+# Inventory helpers
+# ---------------------------------------------------------------------------
 def get_inventory_summary(db):
-    """Fetch all products and return a dict {label: (df, total_value)}."""
     summary = {}
     for label, tbl in ALL_PRODUCT_TABLES.items():
         try:
             data = db.fetch_all(tbl)
             if data:
                 df = pd.DataFrame(data)
-                # calculate total value (MRP * stock if stock exists, else MRP)
                 if "mrp" in df.columns:
                     if "stock" in df.columns:
-                        # stock might be integer
                         df["stock"] = pd.to_numeric(df["stock"], errors='coerce').fillna(1)
                         value = (df["mrp"] * df["stock"]).sum()
                     else:
                         value = df["mrp"].sum()
-                    summary[label] = (df, value)
                 else:
-                    summary[label] = (df, 0)
+                    value = 0
+                summary[label] = (df, value)
             else:
                 summary[label] = (pd.DataFrame(), 0)
-        except Exception as e:
+        except:
             summary[label] = (pd.DataFrame(), 0)
     return summary
 
 def search_inventory(db, keyword: str):
-    """Search all product tables for a keyword."""
     results = {}
     kw = keyword.lower()
     for label, tbl in ALL_PRODUCT_TABLES.items():
@@ -71,19 +90,17 @@ def search_inventory(db, keyword: str):
     return results
 
 # ---------------------------------------------------------------------------
-# Diagnosis helper (image + text)
+# AI / diagnosis helpers (language-aware)
 # ---------------------------------------------------------------------------
 def analyze_image_openai(image_bytes, user_text, api_key):
-    """Use GPT-4o to analyze plant image."""
     try:
         img = Image.open(io.BytesIO(image_bytes))
         img.thumbnail((2048, 2048))
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode()
-
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        messages = [{"role": "system", "content": "You are a plant pathologist. Describe disease symptoms, pest damage, or deficiencies visible in the image. Provide a differential diagnosis with confidence levels. Suggest treatments."}]
+        messages = [{"role": "system", "content": "You are a plant pathologist. Describe disease symptoms, pest damage, or deficiencies visible in the image. Provide a differential diagnosis with confidence levels."}]
         if user_text:
             messages.append({"role": "user", "content": f"User description: {user_text}"})
         messages.append({"role": "user", "content": [
@@ -99,15 +116,22 @@ def analyze_image_openai(image_bytes, user_text, api_key):
     except Exception as e:
         return f"Image analysis failed: {e}"
 
-def diagnose_text_deepseek(prompt, api_key):
-    """Use DeepSeek for diagnosis."""
+def diagnose_text_deepseek(prompt, api_key, lang_code):
+    """Generate diagnosis in the specified language."""
+    lang_name = {v: k for k, v in INDIAN_LANGUAGES.items()}.get(lang_code, "English")
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"model": "deepseek-chat", "messages": [
-        {"role": "system", "content": "You are a plant health expert. Provide a differential diagnosis with confidence levels, then recommend treatments."},
-        {"role": "user", "content": prompt}
-    ], "temperature": 0.5, "max_tokens": 500}
+    system_msg = f"You are a plant health expert. Provide a differential diagnosis with confidence levels, then recommend treatments. Respond in {lang_name} language."
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 800
+    }
     try:
-        resp = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=15)
+        resp = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=20)
         if resp.status_code == 200:
             return resp.json()["choices"][0]["message"]["content"]
         else:
@@ -115,8 +139,10 @@ def diagnose_text_deepseek(prompt, api_key):
     except Exception as e:
         return f"API error: {e}"
 
-def fallback_diagnosis(text, inventory_str):
-    """Simple rule‑based diagnosis when no API keys are set."""
+def fallback_diagnosis(text, inventory_str, lang_code):
+    """Basic rule‑based diagnosis (only English, with a note)."""
+    if lang_code != "en":
+        return f"⚠️ Offline diagnosis is only available in English. Please install an API key for {INDIAN_LANGUAGES.get(lang_code, 'other languages')}."
     text = text.lower()
     diagnoses = []
     if "black spot" in text:
@@ -138,15 +164,14 @@ def fallback_diagnosis(text, inventory_str):
         reply += "**📦 Matching Inventory:**\n" + inventory_str
     return reply
 
-def generate_diagnosis_report(db, user_text, uploaded_image, openai_key, deepseek_key):
-    """Runs the diagnosis and returns a dict with results and inventory matches."""
-    # 1. Image analysis if available
+def generate_diagnosis_report(db, user_text, uploaded_image, openai_key, deepseek_key, lang_code):
+    # 1. Image analysis (always in English, we can translate later if needed)
     image_diag = ""
     if uploaded_image and openai_key:
         image_diag = analyze_image_openai(uploaded_image.read(), user_text, openai_key)
-    # 2. Build combined query
+    # 2. Combine text
     combined = (user_text + " " + image_diag).strip()
-    # 3. Search inventory based on combined query
+    # 3. Search inventory (keyword matching, keep English for now)
     inv = search_inventory(db, combined)
     inv_lines = []
     for cat, rows in inv.items():
@@ -157,41 +182,94 @@ def generate_diagnosis_report(db, user_text, uploaded_image, openai_key, deepsee
             line = f"- {name} (SKU: {sku}) – ₹{price}" if sku and price else f"- {name}"
             inv_lines.append(line)
     inv_str = "\n".join(inv_lines) if inv_lines else "No matching products found."
-    # 4. Text diagnosis
+    # 4. Text diagnosis with language
     if deepseek_key and combined:
-        diag_text = diagnose_text_deepseek(combined, deepseek_key)
+        # Include inventory context in prompt so AI can recommend products
+        prompt = f"Question: {combined}\nInventory available (only recommend from this list):\n{inv_str}\nProvide diagnosis and treatment recommendations."
+        diag_text = diagnose_text_deepseek(prompt, deepseek_key, lang_code)
     else:
-        diag_text = fallback_diagnosis(combined, inv_str)
-    # 5. Build full report
-    report = f"## 🧪 Plant Health Diagnosis Report\n\n"
-    report += f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+        diag_text = fallback_diagnosis(combined, inv_str, lang_code)
+    # 5. Build final report (language-aware heading)
+    if lang_code != "en":
+        # Translate fixed headings (basic mapping, AI handles the rest)
+        heading_diag = "🔬 पादप स्वास्थ्य निदान रिपोर्ट" if lang_code == "hi" else "🔬 Plant Health Diagnosis Report"
+        heading_date = "दिनांक:" if lang_code == "hi" else "Date:"
+        heading_symptoms = "लक्षण:" if lang_code == "hi" else "Symptoms:"
+        heading_products = "उत्पाद सिफ़ारिशें:" if lang_code == "hi" else "Product Recommendations:"
+    else:
+        heading_diag = "🔬 Plant Health Diagnosis Report"
+        heading_date = "Date:"
+        heading_symptoms = "Symptoms:"
+        heading_products = "Product Recommendations:"
+
+    report = f"## {heading_diag}\n\n"
+    report += f"**{heading_date}** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
     if user_text:
-        report += f"**Symptoms described:** {user_text}\n\n"
+        report += f"**{heading_symptoms}** {user_text}\n\n"
     if image_diag:
         report += f"**Image analysis:** {image_diag}\n\n"
-    report += diag_text
-    report += f"\n\n**🛒 Product Recommendations (from your inventory):**\n{inv_str}\n\n"
+    report += diag_text + "\n\n"
+    report += f"**🛒 {heading_products} (from your inventory):**\n{inv_str}\n\n"
     report += "---\n*This report was generated by GrowLeafy. Please verify dosages on product labels.*"
     return {"report": report, "diagnosis": diag_text, "inventory": inv_str, "image_diag": image_diag}
 
-def create_pdf_report(report_md):
-    """Convert report markdown to a simple PDF."""
+# ---------------------------------------------------------------------------
+# PDF generation with Unicode font support for Indian languages
+# ---------------------------------------------------------------------------
+def _find_noto_font():
+    """Try to locate a Noto Sans font on the system (covers many Indian scripts)."""
+    search_paths = [
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans*.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSans*.ttf",
+        "/usr/share/fonts/noto/*.ttf"
+    ]
+    for pattern in search_paths:
+        matches = glob.glob(pattern)
+        for match in matches:
+            if "Regular" in match or "regular" in match.lower():
+                return match
+    return None
+
+def create_pdf_report(report_md, lang_code):
+    """Convert report to PDF, using a Unicode font if language != English."""
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
-    # Very basic: split lines and wrap
-    p.setFont("Helvetica", 10)
+
+    if lang_code != "en":
+        font_path = _find_noto_font()
+        if font_path:
+            try:
+                pdfmetrics.registerFont(TTFont("NotoSans", font_path))
+                font_name = "NotoSans"
+            except:
+                font_name = "Helvetica"
+        else:
+            font_name = "Helvetica"
+    else:
+        font_name = "Helvetica"
+
+    p.setFont(font_name, 10)
     y = h - 30*mm
     for line in report_md.split('\n'):
-        # Simple handling: skip markdown formatting for now
         clean = line.replace('#', '').replace('*', '')
         if clean.strip():
-            p.drawString(20*mm, y, clean[:120])  # crude truncation
+            # Wrap text manually (simple)
+            while len(clean) > 120:
+                p.drawString(20*mm, y, clean[:120])
+                clean = clean[120:]
+                y -= 5*mm
+                if y < 20*mm:
+                    p.showPage()
+                    y = h - 30*mm
+                    p.setFont(font_name, 10)
+            p.drawString(20*mm, y, clean)
             y -= 5*mm
             if y < 20*mm:
                 p.showPage()
                 y = h - 30*mm
-                p.setFont("Helvetica", 10)
+                p.setFont(font_name, 10)
     p.save()
     buffer.seek(0)
     return buffer
@@ -203,7 +281,6 @@ def render(db):
     st.title("📈 Reports & Analytics")
     st.markdown("---")
 
-    # Check API keys
     deepseek_key = st.secrets.get("DEEPSEEK_API_KEY", None)
     openai_key = st.secrets.get("OPENAI_API_KEY", None)
 
@@ -214,105 +291,93 @@ def render(db):
         "🔬 Advanced Plant Diagnosis"
     ])
 
-    # ---------------- TAB 1: Inventory Health -----------------
     with tab1:
         st.subheader("Inventory Distribution")
         summary = get_inventory_summary(db)
-        # Prepare pie chart
-        cat_names = []
-        cat_counts = []
+        cat_names, cat_counts = [], []
         for label, (df, _) in summary.items():
             cat_names.append(label)
             cat_counts.append(len(df) if not df.empty else 0)
         if sum(cat_counts) > 0:
-            pie_df = pd.DataFrame({"Category": cat_names, "Count": cat_counts})
-            fig = px.pie(pie_df, values='Count', names='Category', hole=0.4,
+            fig = px.pie(pd.DataFrame({"Category": cat_names, "Count": cat_counts}),
+                         values='Count', names='Category', hole=0.4,
                          color_discrete_sequence=px.colors.qualitative.Set2)
             fig.update_layout(margin=dict(t=0,b=0,l=0,r=0))
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No inventory data to display.")
+            st.info("No inventory data.")
 
-        # Low stock alert (if stock column exists in any table)
         st.subheader("⚠️ Low Stock Items")
-        low_stock_items = []
+        low_stock = []
         for label, tbl in ALL_PRODUCT_TABLES.items():
             try:
                 data = db.fetch_all(tbl)
                 for item in data:
-                    if "stock" in item and item["stock"] is not None and item["stock"] <= 5:
+                    if "stock" in item and isinstance(item["stock"], (int,float)) and item["stock"] <= 5:
                         name = item.get("name", item.get("product_name",""))
-                        low_stock_items.append(f"{label}: {name} (Stock: {item['stock']})")
-            except:
-                pass
-        if low_stock_items:
-            for it in low_stock_items:
+                        low_stock.append(f"{label}: {name} (Stock: {item['stock']})")
+            except: pass
+        if low_stock:
+            for it in low_stock:
                 st.warning(it)
         else:
             st.success("All items have adequate stock (or stock tracking not enabled).")
 
-    # ---------------- TAB 2: Financial Overview -----------------
     with tab2:
         st.subheader("Estimated Inventory Value (MRP)")
         summary = get_inventory_summary(db)
-        total_value = 0
+        total_value = sum(v for _, (_, v) in summary.items())
         cols = st.columns(len(summary))
-        for col, (label, (df, val)) in zip(cols, summary.items()):
-            with col:
-                st.metric(label, f"₹{val:,.2f}")
-                total_value += val
+        for col, (label, (_, val)) in zip(cols, summary.items()):
+            col.metric(label, f"₹{val:,.2f}")
         st.markdown("---")
         st.metric("**Total Inventory Retail Value**", f"₹{total_value:,.2f}")
 
-    # ---------------- TAB 3: Export Data -----------------
     with tab3:
         st.subheader("Download Database Backups (CSV)")
         cols = st.columns(4)
         i = 0
         for label, tbl in ALL_PRODUCT_TABLES.items():
             try:
-                data = db.fetch_all(tbl)
-                df = pd.DataFrame(data)
+                df = pd.DataFrame(db.fetch_all(tbl))
                 csv = df.to_csv(index=False)
                 with cols[i % 4]:
-                    st.download_button(
-                        f"📥 {label}",
-                        data=csv,
-                        file_name=f"{tbl}_export.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
+                    st.download_button(f"📥 {label}", csv, f"{tbl}_export.csv", "text/csv", use_container_width=True)
                 i += 1
             except:
                 with cols[i % 4]:
                     st.button(f"{label} (no data)", disabled=True)
                 i += 1
 
-    # ---------------- TAB 4: Advanced Plant Diagnosis -----------------
     with tab4:
         st.subheader("🔬 Plant Health Diagnosis & Report")
-        st.markdown("Describe symptoms and/or upload an image. We'll diagnose the issue and search your inventory for solutions.")
+        st.markdown("Describe symptoms and/or upload an image, then choose your preferred language.")
 
-        col1, col2 = st.columns([2, 1])
+        col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
             user_text = st.text_area("Describe symptoms", placeholder="e.g., Rose leaves have black spots, curling")
         with col2:
             uploaded_image = st.file_uploader("Upload image (optional)", type=["jpg","jpeg","png"])
-            if not openai_key:
-                st.caption("⚠️ Image analysis requires OpenAI API key.")
+        with col3:
+            selected_lang_label = st.selectbox("Report Language", list(INDIAN_LANGUAGES.keys()))
+            lang_code = INDIAN_LANGUAGES[selected_lang_label]
 
         if st.button("🔍 Run Diagnosis", type="primary"):
             if not user_text and not uploaded_image:
                 st.warning("Please provide text or image.")
             else:
                 with st.spinner("Analyzing..."):
-                    result = generate_diagnosis_report(db, user_text, uploaded_image, openai_key, deepseek_key)
-                    st.session_state["diagnosis_report"] = result  # store for download
-
+                    result = generate_diagnosis_report(
+                        db, user_text, uploaded_image, openai_key, deepseek_key, lang_code
+                    )
+                    st.session_state["diag_report"] = result
                 st.success("Diagnosis complete!")
                 st.markdown(result["report"])
-                if st.download_button("📄 Download PDF Report",
-                                      data=create_pdf_report(result["report"]),
-                                      file_name=f"plant_diagnosis_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                                      mime="application/pdf"):
-                    st.success("Report downloaded!")
+                # PDF download (language-aware)
+                pdf_data = create_pdf_report(result["report"], lang_code)
+                st.download_button(
+                    "📄 Download PDF Report",
+                    data=pdf_data,
+                    file_name=f"plant_diagnosis_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf"
+                )
