@@ -1,5 +1,5 @@
 """
-Dashboard Component – Updated for unified Agrochemicals table
+Dashboard Component – Unified statistics and recent items across all product tables
 """
 import streamlit as st
 import pandas as pd
@@ -10,18 +10,18 @@ def render(db: DatabaseManager):
     st.title("📊 Dashboard")
     st.markdown("---")
 
-    # 1. Statistics – keys unchanged, but labels updated
+    # 1. Statistics – from the updated get_statistics() (uses agrochemicals)
     stats = db.get_statistics()
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("🌱 Total Plants", stats['total_plants'])
     with col2:
-        st.metric("🌾 Fertilizers", stats['total_fertilizers'])       # from agrochemicals
+        st.metric("🌾 Fertilizers", stats['total_fertilizers'])
     with col3:
-        st.metric("🛡️ Plant Protection", stats['total_insecticides'])  # from agrochemicals
+        st.metric("🛡️ Plant Protection", stats['total_insecticides'])
     with col4:
-        st.metric("🧪 Growth Regulators", stats['total_pesticides'])   # from agrochemicals
+        st.metric("🧪 Growth Regulators", stats['total_pesticides'])
 
     st.markdown("---")
 
@@ -29,6 +29,7 @@ def render(db: DatabaseManager):
     with col5:
         st.metric("🏷️ Printed Tags", stats['total_printed_tags'])
     with col6:
+        # Sum all core product tables (approximation – add more if needed)
         total_items = (
             stats['total_plants']
             + stats['total_fertilizers']
@@ -39,13 +40,15 @@ def render(db: DatabaseManager):
 
     st.markdown("---")
 
-    # 2. Quick search across current tables
+    # 2. Quick search across all active tables
     st.subheader("🔍 Quick Search")
     search_term = st.text_input("Search across all databases", placeholder="Enter name, SKU, brand...")
 
     if search_term:
-        tables = ["plants", "agrochemicals", "pots_planters", "seeds",
-                  "garden_tools", "watering_tools", "garden_decor"]
+        tables = [
+            "plants", "agrochemicals", "pots_planters", "seeds",
+            "garden_tools", "watering_tools", "garden_decor"
+        ]
         results = {}
         total_found = 0
 
@@ -73,10 +76,12 @@ def render(db: DatabaseManager):
 
     st.markdown("---")
 
-    # 3. Recently added items – updated tabs for actual tables
+    # 3. Recently added items – tabs for each product table
     st.subheader("🕒 Recently Added Items")
-    tab_labels = ["Plants", "Agrochemicals", "Pots & Planters", "Seeds",
-                  "Garden Tools", "Watering Tools", "Garden Decor"]
+    tab_labels = [
+        "Plants", "Agrochemicals", "Pots & Planters", "Seeds",
+        "Garden Tools", "Watering Tools", "Garden Decor"
+    ]
     table_map = {
         "Plants": "plants",
         "Agrochemicals": "agrochemicals",
