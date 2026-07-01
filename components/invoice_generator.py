@@ -1,6 +1,6 @@
 """
 components/invoice_generator.py
-Invoice Generator – Tax, Logo, Save, QR, Multi‑format Export
+Enterprise Invoice Generator – Tax, Logo, QR, Save/Delete, Multi‑table Import, Multi‑format Export
 """
 import streamlit as st
 import pandas as pd
@@ -17,17 +17,18 @@ from reportlab.lib import colors
 import qrcode
 from PIL import Image
 
-# Optional: convert PDF to images
+# Optional imports for image conversion
 try:
     from pdf2image import convert_from_bytes
     HAS_PDF2IMAGE = True
 except ImportError:
     HAS_PDF2IMAGE = False
 
-# -------------------------------------------------------------------
-# Helper: UPI QR
-# -------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# HELPERS
+# ------------------------------------------------------------------------------
 def generate_upi_qr(upi_id: str, payee_name: str, amount: float, invoice_ref: str) -> io.BytesIO:
+    """Generate a UPI intent QR code as a PNG in memory."""
     upi_string = f"upi://pay?pa={upi_id}&pn={payee_name}&am={amount:.2f}&tn={invoice_ref}&cu=INR"
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
     qr.add_data(upi_string)
@@ -39,6 +40,7 @@ def generate_upi_qr(upi_id: str, payee_name: str, amount: float, invoice_ref: st
     return buf
 
 def generate_bank_qr(bank_details: str) -> io.BytesIO:
+    """Static QR containing bank account text."""
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
     qr.add_data(bank_details)
     qr.make(fit=True)
@@ -48,10 +50,13 @@ def generate_bank_qr(bank_details: str) -> io.BytesIO:
     buf.seek(0)
     return buf
 
-# -------------------------------------------------------------------
-# PDF generation with logo + tax
-# -------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# PDF RENDERING
+# ------------------------------------------------------------------------------
 def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.BytesIO:
+    """
+    Build a professional invoice PDF with logo, items, tax rows, and QR codes.
+    """
     buf = io.BytesIO()
     page_w, page_h = page_size
     c = canvas.Canvas(buf, pagesize=page_size)
@@ -61,20 +66,19 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
     ml, mr, mt, mb = 25*mm, 25*mm, 20*mm, 20*mm
     usable_w = w - ml - mr
 
-    # ---- LOGO (top left) ----
+    # --- Logo (top left) ---
     if logo_bytes:
         logo_buf = io.BytesIO(logo_bytes)
         logo = ImageReader(logo_buf)
-        # logo size: max 60mm wide, 25mm high
         logo_w = 50*mm
         logo_h = 20*mm
-        c.drawImage(logo, ml, h - mt - logo_h, width=logo_w, height=logo_h, preserveAspectRatio=True, mask='auto')
-        # Adjust header position so text doesn't overlap logo
+        c.drawImage(logo, ml, h - mt - logo_h, width=logo_w, height=logo_h,
+                    preserveAspectRatio=True, mask='auto')
         header_y = h - mt - 10*mm
     else:
         header_y = h - mt - 10*mm
 
-    # ---- HEADER ----
+    # --- HEADER ---
     c.setFont("Helvetica-Bold", 16)
     c.drawString(ml, header_y, "INVOICE")
 
@@ -93,9 +97,9 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
         c.drawString(tx, ty, line)
         ty -= 4*mm
 
-    # Bill To section (left)
+    # Bill To (left)
     c.setFont("Helvetica-Bold", 10)
-    ty = h - mt - (35*mm if logo_bytes else 28*mm)  # adjust if logo present
+    ty = h - mt - (35*mm if logo_bytes else 28*mm)
     c.drawString(ml, ty, "Billed To")
     ty -= 5*mm
     c.setFont("Helvetica", 9)
@@ -109,7 +113,7 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
         ty -= 4*mm
     c.drawString(ml, ty, client.get('country',''))
 
-    # Dates and Invoice number (right side)
+    # Dates & Invoice No (right side)
     c.setFont("Helvetica-Bold", 9)
     tx = w - mr - 80*mm
     ty = h - mt - 45*mm
@@ -132,7 +136,7 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
     c.setFont("Helvetica", 9)
     c.drawString(tx + 35*mm, ty, f"INR {invoice_data['grand_total']:,.2f}")
 
-    # ---- ITEMS TABLE ----
+    # --- ITEMS TABLE ---
     table_top = h - mt - (95*mm if logo_bytes else 88*mm)
     header = ['Description', 'Rate', 'Qty', 'Amount']
     data = [header]
@@ -143,6 +147,7 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
             str(item['qty']),
             f"{item['amount']:,.2f}"
         ])
+
     # Tax rows
     if invoice_data.get('tax_enabled'):
         data.append(['', '', 'Taxable Amount', f"{invoice_data['taxable_amount']:,.2f}"])
@@ -152,7 +157,7 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
             data.append(['', '', f"SGST @{invoice_data['sgst_rate']}%", f"{invoice_data['sgst_amount']:,.2f}"])
         if invoice_data.get('igst_rate', 0) > 0:
             data.append(['', '', f"IGST @{invoice_data['igst_rate']}%", f"{invoice_data['igst_amount']:,.2f}"])
-    # Grand total
+
     data.append(['', '', 'Grand Total', f"{invoice_data['grand_total']:,.2f}"])
     data.append(['', '', 'Balance Due', f"{invoice_data['balance_due']:,.2f}"])
 
@@ -181,7 +186,7 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
     tw, th = t.wrap(0, 0)
     t.drawOn(c, ml, table_top - th)
 
-    # ---- NOTES and TERMS ----
+    # --- NOTES & TERMS ---
     ty = table_top - th - 10*mm
     if invoice_data.get('notes'):
         c.setFont("Helvetica-Bold", 9)
@@ -199,8 +204,8 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
         c.setFont("Helvetica", 8)
         c.drawString(ml, ty, invoice_data['terms'])
 
-    # ---- QR CODES ----
-    # UPI QR (dynamic)
+    # --- QR CODES (bottom right) ---
+    # Dynamic UPI QR
     upi_buf = generate_upi_qr(
         sender.get('upi_id',''),
         sender.get('upi_name',''),
@@ -213,7 +218,7 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
     c.setFont("Helvetica", 6)
     c.drawString(w - mr - qr_size - 5*mm, 18*mm, "Scan to Pay (UPI)")
 
-    # Bank QR (static)
+    # Bank account QR (static)
     if sender.get('bank_details'):
         bank_buf = generate_bank_qr(sender['bank_details'])
         bank_img = ImageReader(bank_buf)
@@ -229,94 +234,108 @@ def generate_invoice_pdf(invoice_data: dict, page_size, logo_bytes=None) -> io.B
     buf.seek(0)
     return buf
 
-# -------------------------------------------------------------------
-# Streamlit UI
-# -------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# STREAMLIT UI
+# ------------------------------------------------------------------------------
 def render(db=None):
-    st.title("🧾 Invoice Generator")
-    st.caption("Tax, Logo, Auto‑numbering, Save & WhatsApp‑ready output")
+    st.title("🧾 Enterprise Invoice Generator")
+    st.caption("Professional invoices with tax, QR, multi‑table item import, and export options")
 
-    # ------------------ Session state initialization ------------------
-    if 'inv_sender' not in st.session_state:
-        st.session_state.inv_sender = {
+    # --- Session state initialisation ---
+    defaults = {
+        'inv_sender': {
             'company': 'Biswas Ventures',
             'address': 'Madhabpur - Panpur Road\nPanpur, West Bengal, 743126, India',
-            'phone': '9804939270',
+            'phone': '9903026500',
             'email': 'biswas4trade@gmail.com',
             'bank_details': 'A/C name : Subhasis Biswas\nAccount No. : 32781178011\nIFSC : SBIN0006042\nBRANCH : RATHTALA\nSTATE BANK OF INDIA',
-            'upi_id': 'subhasisboi@axl',
+            'upi_id': '9903026500@upi',
             'upi_name': 'Subhasis Biswas'
-        }
-    if 'inv_client' not in st.session_state:
-        st.session_state.inv_client = {
+        },
+        'inv_client': {
             'name': '',
             'address': '',
             'city': '',
             'state': '',
             'zip': '',
             'country': 'India'
-        }
-    if 'inv_items' not in st.session_state:
-        st.session_state.inv_items = []
-    if 'inv_tax_enabled' not in st.session_state:
-        st.session_state.inv_tax_enabled = False
-    if 'inv_logo_bytes' not in st.session_state:
-        st.session_state.inv_logo_bytes = None
-    if 'inv_prefix' not in st.session_state:
-        st.session_state.inv_prefix = "BV/MLP"
+        },
+        'inv_items': [],
+        'inv_tax_enabled': False,
+        'inv_logo_bytes': None,
+        'inv_prefix': "BV/MLP",
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
 
-    # ------------------ Page size & serial counter ------------------
-    col_page, col_num = st.columns(2)
-    with col_page:
-        page_format = st.selectbox("Page Size", ["A4", "Letter"])
-    with col_num:
+    # --- Page size & Invoice number ---
+    col1, col2 = st.columns(2)
+    with col1:
+        page_format = st.selectbox("Page Size", ["A4", "Letter"], index=0)
+    with col2:
         use_auto = st.checkbox("Auto‑generate invoice number", value=True)
         if use_auto:
-            if st.button("🔄 Generate New Invoice Number"):
+            if st.button("🔄 New Invoice Number"):
                 if db:
-                    invoice_number = db.get_next_invoice_number(st.session_state.inv_prefix)
-                    st.session_state.inv_number = invoice_number
-                    st.success(f"New number: {invoice_number}")
+                    inv_num = db.get_next_invoice_number(st.session_state.inv_prefix)
+                    st.session_state.inv_number = inv_num
+                    st.success(f"New number: {inv_num}")
                 else:
                     st.warning("Database not connected")
-            inv_num = st.text_input("Invoice Number", value=st.session_state.get('inv_number', ''), key="inv_num_input")
+            inv_num = st.text_input("Invoice Number", value=st.session_state.get('inv_number', ''),
+                                    key="inv_num_auto")
         else:
             inv_num = st.text_input("Invoice Number", value="BV/MLP/2025/01")
 
     page_size = A4 if page_format == "A4" else LETTER
 
-    # ------------------ Sender & Client details ------------------
+    # --- Sender & Client ---
     with st.expander("🏢 Company Details (Sender)", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.session_state.inv_sender['company'] = st.text_input("Company Name", value=st.session_state.inv_sender['company'])
-            st.session_state.inv_sender['address'] = st.text_area("Address", value=st.session_state.inv_sender['address'], height=80)
-        with col2:
-            st.session_state.inv_sender['phone'] = st.text_input("Phone", value=st.session_state.inv_sender['phone'])
-            st.session_state.inv_sender['email'] = st.text_input("Email", value=st.session_state.inv_sender['email'])
-            st.session_state.inv_sender['bank_details'] = st.text_area("Bank Account Details", value=st.session_state.inv_sender['bank_details'], height=80)
-            st.session_state.inv_sender['upi_id'] = st.text_input("UPI ID", value=st.session_state.inv_sender.get('upi_id',''))
-            st.session_state.inv_sender['upi_name'] = st.text_input("UPI Payee Name", value=st.session_state.inv_sender.get('upi_name',''))
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.session_state.inv_sender['company'] = st.text_input("Company Name",
+                                                                   st.session_state.inv_sender['company'])
+            st.session_state.inv_sender['address'] = st.text_area("Address",
+                                                                  st.session_state.inv_sender['address'], height=80)
+        with col_b:
+            st.session_state.inv_sender['phone'] = st.text_input("Phone",
+                                                                 st.session_state.inv_sender['phone'])
+            st.session_state.inv_sender['email'] = st.text_input("Email",
+                                                                 st.session_state.inv_sender['email'])
+            st.session_state.inv_sender['bank_details'] = st.text_area("Bank Details",
+                                                                       st.session_state.inv_sender['bank_details'], height=80)
+            st.session_state.inv_sender['upi_id'] = st.text_input("UPI ID",
+                                                                  st.session_state.inv_sender.get('upi_id',''))
+            st.session_state.inv_sender['upi_name'] = st.text_input("UPI Payee Name",
+                                                                    st.session_state.inv_sender.get('upi_name',''))
         # Logo upload
-        logo_file = st.file_uploader("Company Logo (PNG/JPG)", type=["png","jpg","jpeg"])
+        logo_file = st.file_uploader("Company Logo", type=["png","jpg","jpeg"])
         if logo_file:
             st.session_state.inv_logo_bytes = logo_file.read()
             st.image(st.session_state.inv_logo_bytes, width=150)
-        else:
+        elif st.session_state.inv_logo_bytes:
+            st.image(st.session_state.inv_logo_bytes, width=150)
             if st.button("Remove Logo"):
                 st.session_state.inv_logo_bytes = None
                 st.rerun()
 
     with st.expander("🧾 Client Details (Bill To)", expanded=True):
-        colc1, colc2 = st.columns(2)
-        with colc1:
-            st.session_state.inv_client['name'] = st.text_input("Client Name", value=st.session_state.inv_client['name'])
-            st.session_state.inv_client['address'] = st.text_area("Address", value=st.session_state.inv_client['address'], height=80)
-        with colc2:
-            st.session_state.inv_client['city'] = st.text_input("City", value=st.session_state.inv_client['city'])
-            st.session_state.inv_client['state'] = st.text_input("State", value=st.session_state.inv_client['state'])
-            st.session_state.inv_client['zip'] = st.text_input("ZIP", value=st.session_state.inv_client['zip'])
-            st.session_state.inv_client['country'] = st.text_input("Country", value=st.session_state.inv_client['country'])
+        col_c, col_d = st.columns(2)
+        with col_c:
+            st.session_state.inv_client['name'] = st.text_input("Client Name",
+                                                                st.session_state.inv_client['name'])
+            st.session_state.inv_client['address'] = st.text_area("Address",
+                                                                  st.session_state.inv_client['address'], height=80)
+        with col_d:
+            st.session_state.inv_client['city'] = st.text_input("City",
+                                                                st.session_state.inv_client['city'])
+            st.session_state.inv_client['state'] = st.text_input("State",
+                                                                 st.session_state.inv_client['state'])
+            st.session_state.inv_client['zip'] = st.text_input("ZIP",
+                                                               st.session_state.inv_client['zip'])
+            st.session_state.inv_client['country'] = st.text_input("Country",
+                                                                   st.session_state.inv_client['country'])
 
     # Dates
     col_d1, col_d2 = st.columns(2)
@@ -325,7 +344,7 @@ def render(db=None):
     with col_d2:
         due_date = st.date_input("Due Date", value=date.today() + timedelta(days=30))
 
-    # ------------------ Items with tax settings ------------------
+    # --- Items & Tax ---
     st.subheader("📋 Invoice Items")
     col_tax_toggle, _ = st.columns([1,3])
     with col_tax_toggle:
@@ -342,12 +361,53 @@ def render(db=None):
     else:
         cgst_rate = sgst_rate = igst_rate = 0.0
 
-    # Item rows
+    # Database import (optional)
+    if db:
+        with st.expander("📦 Import item from database", expanded=False):
+            table_labels = {
+                "Plants": "plants",
+                "Fertilizers": "fertilizers",
+                "Insecticides": "insecticides",
+                "Pesticides": "pesticides",
+                "Pots & Planters": "pots_planters",  # adjust actual table name if different
+                "Other (custom)": "__custom__"
+            }
+            selected_label = st.selectbox("Source table", list(table_labels.keys()))
+            table_name = table_labels[selected_label]
+            if table_name == "__custom__":
+                table_name = st.text_input("Enter table name", value="pots_planters")
+
+            if st.button("🔍 Fetch items"):
+                try:
+                    data = db.fetch_all(table_name)
+                    if data:
+                        df = pd.DataFrame(data)
+                        selected_idx = st.selectbox(
+                            "Choose item",
+                            df.index,
+                            format_func=lambda x: f"{df.iloc[x].get('name', df.iloc[x].get('product_name', '?'))} "
+                                                  f"(SKU: {df.iloc[x].get('sku','N/A')})"
+                        )
+                        if st.button("➕ Add to Invoice"):
+                            row = df.iloc[selected_idx]
+                            st.session_state.inv_items.append({
+                                'description': f"{row.get('name', row.get('product_name', 'Item'))} ({row.get('sku','')})",
+                                'rate': row.get('mrp', 0.0),
+                                'qty': 1,
+                                'amount': row.get('mrp', 0.0)
+                            })
+                            st.rerun()
+                    else:
+                        st.info("No data in this table.")
+                except Exception as e:
+                    st.warning(f"Could not read table `{table_name}`: {e}")
+
+    # Manual item rows
     edited_items = []
     for i, item in enumerate(st.session_state.inv_items):
-        cols = st.columns([4,1.5,1,1.5,1])
+        cols = st.columns([4, 1.5, 1, 1.5, 1])
         with cols[0]:
-            desc = st.text_input(f"Description {i+1}", value=item['description'], key=f"desc_{i}")
+            desc = st.text_input(f"Desc {i+1}", item['description'], key=f"desc_{i}")
         with cols[1]:
             rate = st.number_input(f"Rate {i+1}", value=float(item['rate']), min_value=0.0, format="%.2f", key=f"rate_{i}")
         with cols[2]:
@@ -356,7 +416,7 @@ def render(db=None):
             amount = rate * qty
             st.text(f"₹{amount:,.2f}")
         with cols[4]:
-            if st.button("🗑️", key=f"del_{i}"):
+            if st.button("🗑", key=f"del_{i}"):
                 del st.session_state.inv_items[i]
                 st.rerun()
         edited_items.append({'description': desc, 'rate': rate, 'qty': qty, 'amount': amount})
@@ -368,87 +428,99 @@ def render(db=None):
     # Notes & Terms
     col_n, col_t = st.columns(2)
     with col_n:
-        notes = st.text_area("Notes", value="A/C name : Subhasis Biswas\nAccount No. : 32781178011\nIFSC : SBIN0006042\nBRANCH : RATHTALA\nSTATE BANK OF INDIA", height=100)
+        notes = st.text_area("Notes", value="A/C name : Subhasis Biswas\nAccount No. : 32781178011\n"
+                                             "IFSC : SBIN0006042\nBRANCH : RATHTALA\nSTATE BANK OF INDIA", height=100)
     with col_t:
-        terms = st.text_area("Terms", value="Payable within 30 days from the date of invoice. Applicable TDS may be deducted.", height=100)
+        terms = st.text_area("Terms", value="Payable within 30 days from the date of invoice. "
+                                            "Applicable TDS may be deducted.", height=100)
 
-    # ------------------ Calculations ------------------
-    subtotal = sum(item['amount'] for item in edited_items) if edited_items else 0.0
+    # --- Calculations ---
+    subtotal = sum(it['amount'] for it in edited_items) if edited_items else 0.0
     taxable_amount = subtotal
     cgst_amount = round(taxable_amount * cgst_rate / 100, 2)
     sgst_amount = round(taxable_amount * sgst_rate / 100, 2)
     igst_amount = round(taxable_amount * igst_rate / 100, 2)
     grand_total = taxable_amount + cgst_amount + sgst_amount + igst_amount
-    balance_due = grand_total  # can be adjusted for partial payments later
+    balance_due = grand_total
 
-    # Display summary
     st.subheader("💰 Summary")
-    col_s1, col_s2, col_s3 = st.columns(3)
-    with col_s1:
-        st.metric("Sub Total", f"₹{subtotal:,.2f}")
-    with col_s2:
-        if st.session_state.inv_tax_enabled:
-            st.metric("Tax", f"₹{cgst_amount+sgst_amount+igst_amount:,.2f}")
-        else:
-            st.metric("Tax", "₹0.00")
-    with col_s3:
-        st.metric("Grand Total", f"₹{grand_total:,.2f}")
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Subtotal", f"₹{subtotal:,.2f}")
+    if st.session_state.inv_tax_enabled:
+        total_tax = cgst_amount + sgst_amount + igst_amount
+        s2.metric("Total Tax", f"₹{total_tax:,.2f}")
+    else:
+        s2.metric("Tax", "₹0.00")
+    s3.metric("Grand Total", f"₹{grand_total:,.2f}")
 
-    # ------------------ Generate & Output Options ------------------
-    st.subheader("📄 Generate Invoice")
-    output_format = st.radio("Output Format", ["PDF", "PNG Image", "WhatsApp Optimized Image"], horizontal=True)
+    # --- Output format & Generate ---
+    st.subheader("📄 Generate & Export")
+    # Determine available formats
+    available_formats = ["PDF"]
+    can_img = HAS_PDF2IMAGE and False  # we'll test later
+    # Test poppler availability by actually trying a tiny conversion later,
+    # but we can just allow image options if pdf2image is imported.
+    if HAS_PDF2IMAGE:
+        available_formats += ["PNG Image", "WhatsApp Optimized Image"]
+
+    output_format = st.radio("Output Format", available_formats, horizontal=True)
 
     if st.button("🚀 Generate Invoice", type="primary", use_container_width=True):
         if not edited_items:
-            st.error("Please add at least one item.")
-        else:
-            invoice_data = {
-                'sender': st.session_state.inv_sender,
-                'client': st.session_state.inv_client,
-                'invoice_number': inv_num,
-                'date_issued': date_issued.strftime("%B %d, %Y"),
-                'due_date': due_date.strftime("%B %d, %Y"),
-                'items': edited_items,
-                'taxable_amount': taxable_amount,
-                'cgst_rate': cgst_rate,
-                'sgst_rate': sgst_rate,
-                'igst_rate': igst_rate,
-                'cgst_amount': cgst_amount,
-                'sgst_amount': sgst_amount,
-                'igst_amount': igst_amount,
-                'tax_enabled': st.session_state.inv_tax_enabled,
-                'grand_total': grand_total,
-                'balance_due': balance_due,
-                'notes': notes,
-                'terms': terms
-            }
-            pdf_buffer = generate_invoice_pdf(invoice_data, page_size, st.session_state.inv_logo_bytes)
+            st.error("Add at least one item.")
+            return
 
-            # --- Save to database (optional) ---
-            if db and st.button("💾 Save Invoice to Database"):
-                success = db.save_invoice(invoice_data)
-                if success:
+        invoice_data = {
+            'sender': st.session_state.inv_sender,
+            'client': st.session_state.inv_client,
+            'invoice_number': inv_num,
+            'date_issued': date_issued.strftime("%B %d, %Y"),
+            'due_date': due_date.strftime("%B %d, %Y"),
+            'items': edited_items,
+            'taxable_amount': taxable_amount,
+            'cgst_rate': cgst_rate,
+            'sgst_rate': sgst_rate,
+            'igst_rate': igst_rate,
+            'cgst_amount': cgst_amount,
+            'sgst_amount': sgst_amount,
+            'igst_amount': igst_amount,
+            'tax_enabled': st.session_state.inv_tax_enabled,
+            'grand_total': grand_total,
+            'balance_due': balance_due,
+            'notes': notes,
+            'terms': terms
+        }
+
+        pdf_buffer = generate_invoice_pdf(invoice_data, page_size,
+                                          st.session_state.inv_logo_bytes)
+
+        # Save to DB
+        if db:
+            if st.button("💾 Save Invoice to Database"):
+                ok = db.save_invoice(invoice_data)
+                if ok:
                     st.success("Invoice saved!")
                 else:
-                    st.error("Failed to save.")
+                    st.error("Could not save invoice.")
 
-            # --- Output formats ---
-            if output_format == "PDF":
-                st.download_button("📥 Download PDF", data=pdf_buffer, file_name=f"Invoice_{inv_num}.pdf", mime="application/pdf")
+        # Deliver chosen format
+        if output_format == "PDF":
+            st.download_button("📥 Download PDF", data=pdf_buffer,
+                               file_name=f"Invoice_{inv_num}.pdf", mime="application/pdf")
+        elif output_format.startswith("PNG") or "WhatsApp" in output_format:
+            if not HAS_PDF2IMAGE:
+                st.error("pdf2image not installed. Install it with `pip install pdf2image`.")
             else:
-                if not HAS_PDF2IMAGE:
-                    st.error("pdf2image not installed. Run: pip install pdf2image")
-                else:
-                    # Convert PDF to images
+                try:
                     images = convert_from_bytes(pdf_buffer.getvalue(), dpi=200)
                     if output_format == "PNG Image":
                         img_buf = io.BytesIO()
                         images[0].save(img_buf, format='PNG')
                         img_buf.seek(0)
-                        st.download_button("📥 Download PNG", data=img_buf, file_name=f"Invoice_{inv_num}.png", mime="image/png")
+                        st.download_button("📥 Download PNG", data=img_buf,
+                                           file_name=f"Invoice_{inv_num}.png", mime="image/png")
                         st.image(images[0], caption="Invoice Preview")
-                    elif output_format == "WhatsApp Optimized Image":
-                        # Resize to 800px width, keep aspect ratio
+                    else:  # WhatsApp optimised
                         img = images[0]
                         w_percent = 800 / float(img.size[0])
                         h_size = int(float(img.size[1]) * w_percent)
@@ -456,19 +528,23 @@ def render(db=None):
                         img_buf = io.BytesIO()
                         img.save(img_buf, format='JPEG', quality=85)
                         img_buf.seek(0)
-                        st.download_button("📥 Download for WhatsApp", data=img_buf, file_name=f"Invoice_{inv_num}_wa.jpg", mime="image/jpeg")
+                        st.download_button("📥 Download for WhatsApp", data=img_buf,
+                                           file_name=f"Invoice_{inv_num}_wa.jpg", mime="image/jpeg")
                         st.image(img, caption="WhatsApp Preview (800px)")
+                except Exception as e:
+                    st.error("❌ Could not convert PDF to image. This usually means `poppler` is missing.")
+                    st.info("Please add `poppler-utils` to `packages.txt` or use PDF format.")
 
-            # UPI QR preview
-            upi_preview = generate_upi_qr(
-                st.session_state.inv_sender.get('upi_id',''),
-                st.session_state.inv_sender.get('upi_name',''),
-                balance_due,
-                f"INV-{inv_num}"
-            )
-            st.image(upi_preview, caption="Dynamic UPI QR", width=150)
+        # UPI QR preview
+        upi_preview = generate_upi_qr(
+            st.session_state.inv_sender.get('upi_id',''),
+            st.session_state.inv_sender.get('upi_name',''),
+            balance_due,
+            f"INV-{inv_num}"
+        )
+        st.image(upi_preview, caption="Dynamic UPI QR", width=150)
 
-    # ------------------ Saved Invoices History ------------------
+    # --- Saved Invoices (if DB connected) ---
     if db:
         st.markdown("---")
         st.subheader("📚 Saved Invoices")
@@ -476,12 +552,12 @@ def render(db=None):
         if invoices:
             for inv in invoices:
                 with st.expander(f"{inv.get('invoice_number','')} – {inv.get('created_at','')[:10]}"):
-                    # Display basic info
+                    # Parse the stored JSON
                     data = json.loads(inv['data'])
                     st.write(f"**Client:** {data['client']['name']}")
                     st.write(f"**Total:** ₹{data['grand_total']:,.2f}")
                     st.write(f"**Date:** {data['date_issued']}")
-                    if st.button("🗑️ Delete", key=f"del_inv_{inv['id']}"):
+                    if st.button("🗑 Delete", key=f"del_inv_{inv['id']}"):
                         if db.delete_invoice(inv['id']):
                             st.success("Deleted!")
                             st.rerun()
