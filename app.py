@@ -26,7 +26,8 @@ from components import (
     tag_generator,
     search,
     reports,
-    ai_chat
+    ai_chat,
+    invoice_generator          # <-- Added
 )
 
 # Load environment variables
@@ -42,21 +43,18 @@ def init_database():
     url = None
     key = None
 
-    # Try secrets (Streamlit Cloud)
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
     except KeyError:
         pass
 
-    # Fallback to environment variables (local .env)
     if not url or not key:
         url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_KEY")
 
-    # If still missing, show a clear error and stop
     if not url or not key:
-        st.error("🚨 Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_KEY in .env or Streamlit secrets.")
+        st.error("🚨 Missing Supabase credentials. Set SUPABASE_URL and SUPABASE_KEY in .env or Streamlit secrets.")
         st.stop()
 
     return DatabaseManager(url=url, key=key)
@@ -83,7 +81,8 @@ class GrowLeafyApp:
             with open('assets/styles.css') as f:
                 st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
         except FileNotFoundError:
-            st.warning("Styling file not found. Create `assets/styles.css` for the fluid experience.")
+            # Swallow warning, not critical for functionality
+            pass
 
     def render_sidebar(self):
         """Render a polished, fluid sidebar navigation"""
@@ -92,7 +91,7 @@ class GrowLeafyApp:
             st.markdown("<p style='text-align: center; color: gray; font-size: 0.9em; margin-top: -15px;'>Nursery Management</p>", unsafe_allow_html=True)
             st.markdown("---")
 
-            # Navigation menu
+            # Navigation menu (added Invoice Generator)
             menu_items = {
                 "Dashboard": "📊 Dashboard",
                 "Plant Database": "🌱 Plant Database",
@@ -100,6 +99,7 @@ class GrowLeafyApp:
                 "Insecticide Database": "🐛 Insecticide Database",
                 "Pesticide Database": "🛡️ Pesticide Database",
                 "Tag Generator": "🏷️ Tag Generator",
+                "Invoice Generator": "🧾 Invoice Generator",
                 "Advanced Search": "🔍 Advanced Search",
                 "Reports": "📈 Reports",
                 "AI Assistant": "🤖 AI Assistant"
@@ -107,7 +107,6 @@ class GrowLeafyApp:
 
             st.markdown("### Navigation")
             for page_key, label in menu_items.items():
-                # Visual indicator for the active page
                 is_active = st.session_state.current_page == page_key
                 button_type = "primary" if is_active else "secondary"
 
@@ -118,7 +117,7 @@ class GrowLeafyApp:
 
             st.markdown("---")
 
-            # Settings Expander (Keeps sidebar clean)
+            # Settings Expander
             with st.expander("⚙️ Application Settings", expanded=False):
                 new_theme = st.selectbox(
                     "Theme",
@@ -154,18 +153,19 @@ class GrowLeafyApp:
             "Insecticide Database": insecticide_database.render,
             "Pesticide Database": pesticide_database.render,
             "Tag Generator": tag_generator.render,
+            "Invoice Generator": invoice_generator.render,
             "Advanced Search": search.render,
             "Reports": reports.render,
             "AI Assistant": ai_chat.render
         }
 
-        # Wrap content in a styled div for CSS animations
         st.markdown('<div class="fluid-container">', unsafe_allow_html=True)
 
         if current_page in page_components:
             if current_page == "AI Assistant" and not st.session_state.ai_enabled:
                 st.warning("The AI Assistant is currently disabled in your settings.")
             else:
+                # Pass the db instance to every component that expects it
                 page_components[current_page](self.db)
 
         st.markdown('</div>', unsafe_allow_html=True)
